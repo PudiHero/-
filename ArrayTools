@@ -1,0 +1,167 @@
+%REM
+	Library ArrayTools
+	Created 2024/10/14 by ARNO TU/DCT
+	Description: Array相關工具
+%END REM
+Option Public
+
+%REM
+	Function ShiftValue
+	Description: 使array的值向左(L)或右(R)移動n個位置
+%END REM
+Function ShiftValue(array, direction$, n%)
+	
+	If IsArray(array) = False Then
+		ErrorStr$ = "傳入非array"
+		GoTo ERRORPRINT_
+	ElseIf n% < 1 Then
+		ErrorStr$ = "移動數量不可小於1"
+		GoTo ERRORPRINT_
+	End If
+	
+	If UCase(direction$) = "R" Then '往右移
+		'往右移n單位=往左移Ubound+1-n單位
+		n% = UBound(array)+1 - n%
+	ElseIf UCase(direction$) = "L" Then '往左移
+	Else
+		ErrorStr$ = "傳入的方向錯誤"
+		GoTo ERRORPRINT_
+	End If
+	
+	tmparray = Evaluate(|""|)
+	
+	For i = n% To UBound(array)
+		tmparray = FullTrim(ArrayAppend(tmparray, array(i)))
+	Next
+	
+	For j = 0 To n%-1
+		tmparray = FullTrim(ArrayAppend(tmparray, array(j)))
+	Next
+	
+	ShiftValue = tmparray
+	Exit Function
+	
+ERRORPRINT_:
+	Print "【Function】ShiftValue:"+ErrorStr$
+	ShiftValue = array
+	
+End Function
+
+%REM
+	Function InsertValue
+	Description: Array插入值
+%END REM
+Function InsertValue(array, index%, replacement)
+	
+	If IsArray(array) = False Then
+		ErrorStr$ = "傳入非array"
+		GoTo ERRORPRINT_
+	ElseIf index% < 0 Or index% > UBound(array) Then
+		ErrorStr$ = "傳入的index超出範圍"
+		GoTo ERRORPRINT_
+	End If
+	
+	tmparray = Evaluate(|""|)
+	
+	For i = 0 To UBound(array)
+		If i = index% Then tmparray = ArrayAppend(tmparray, replacement)
+		tmparray = FullTrim(ArrayAppend(tmparray, array(i)))
+	Next
+	
+	InsertValue = tmparray
+	Exit Function
+	
+ERRORPRINT_:
+	Print "【Function】InsertValue:"+ErrorStr$
+	InsertValue = array
+	
+End Function
+
+%REM
+	Function CreateSerialArray
+	Description: 創造出amount個的陣列，前後可加字串
+%END REM
+Function CreateSerialArray(amount%, intro$, outtro$)
+	
+	If amount% < 1 Then
+		ErrorStr$ = "傳入的數量不可小於1"
+		GoTo ERRORPRINT_
+	End If
+	
+	tmparray = Evaluate(|""|)
+	
+	For i = 1 To amount%
+		tmparray = FullTrim(ArrayAppend(tmparray, intro$ + CStr(i) + outtro$))
+	Next
+	
+	CreateSerialArray = tmparray
+	Exit Function
+	
+ERRORPRINT_:
+	Print "【Function】CreateSerialArray:"+ErrorStr$
+	Set CreateSerialArray = Nothing
+	
+End Function
+
+%REM
+	Function ReverseArray
+	Description: 將傳入的array反轉
+%END REM
+Function ReverseArray(array)
+	
+	If IsArray(array) = False Then
+		ErrorStr$ = "傳入非array"
+		GoTo ERRORPRINT_
+	End If
+	
+	tmparray = Evaluate(|""|)
+	
+	For i = 0 To UBound(array)
+		tmparray = InsertValue(tmparray, 0, array(i))
+	Next
+	
+	ReverseArray = tmparray
+	Exit Function
+	
+ERRORPRINT_:
+	Print "【Function】ReverseArray:"+ErrorStr$
+	ReverseArray = array
+	
+End Function
+%REM
+	Function SortArray
+	Description: 將傳入的array排序(升冪)
+%END REM
+Function SortArray(array)
+	
+	If IsArray(array) = False Then
+		ErrorStr$ = "傳入非array"
+		GoTo ERRORPRINT_
+	End If
+	
+	tmparray = array
+	tmparray2 = Evaluate(|""|)
+	min = array(0) '先以第一個值作最小
+	
+	'找最小放最前
+	For j = 0 To UBound(array)
+		For i = 1 To UBound(tmparray)
+			If tmparray(i) < min Then min = tmparray(i)
+		Next
+		tmparray2 = FullTrim(ArrayAppend(tmparray2, min))
+		
+		'從tmparray清除
+		index% = ArrayGetIndex(tmparray, min)
+		tmparray(index%) = ""
+		tmparray = FullTrim(tmparray)
+		min = tmparray(0)
+	Next
+	
+	SortArray = tmparray2
+	Exit Function
+	
+ERRORPRINT_:
+	Print "【Function】SortArray:"+ErrorStr$
+	SortArray = array
+	
+End Function
