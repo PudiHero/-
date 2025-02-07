@@ -1,0 +1,433 @@
+%REM
+	Agent 更新造交機進度
+	Created 2025/1/7 by ARNO TU/DCT
+	Description:
+	點擊按鈕後跳出視窗填寫造交機進度
+	並更新選取的文件
+%END REM
+Option Public
+Use "0BPIEnvClassSrc"
+Use "DCTBPIKeyDefSrc"
+Use "DCT_GetBPIdbClass"
+
+Use "LogTools"
+
+'Use "ParkingLotTools" '用來更新智取櫃庫存管理文件 add by Arno Tu 2025/01/23
+Sub Initialize
+	Dim s As New NotesSession
+	Dim ws As New NotesUIWorkspace
+	Dim db As NotesDatabase
+	
+	'add by Arno Tu 2025/02/06
+	'Dim PLview As NotesView
+	'Dim PLdoc As NotesDocument
+	
+	Dim dc As NotesDocumentCollection
+	Dim doc As NotesDocument 'TTS明細
+	Dim tmpdoc As NotesDocument '更新子表單
+	Dim pdoc As NotesDocument
+	
+	'SO add by Arno Tu 2025/02/05
+	Dim SOdb As NotesDatabase '記得移!
+	Dim SOview As NotesView '記得移!
+	Dim SOdoc As NotesDocument '記得移!
+	Dim SendList List As String '紀錄寄件人(key)及其內容(value) '記得移!
+	
+	'add by Arno Tu 2025/02/06
+	Dim QtyList List As Integer '紀錄入了幾台主機
+	
+	Set db = s.Currentdatabase
+	Set tmpdoc = db.Createdocument
+	Set pdoc = db.Getprofiledocument("SetupProfile")
+	
+	'add by Arno Tu 2025/02/06
+	Set PLview = db.Getview("ParkingByFac") '30.智能櫃管理\停機場管理-依廠區-PU
+	
+	'SO add by Arno Tu 2025/02/05
+	Set BPIPara = New DCT_BPIdbClass(SODBBPIKEY) '記得移!
+	Set SOdb = New NotesDatabase(BPIPara.SvrName , BPIPara.DBName) '記得移!
+	Set SOview = SOdb.Getview("BySO") '依SO號碼 '記得移!
+	
+	TSMCFactory = pdoc.TSMCFactory '廠區array
+	Area = pdoc.Area '地區array
+	
+	'先看是否有非智取櫃取貨的，有的話要隱藏存放位置不給填
+	Set dc = db.Unprocesseddocuments
+	Set doc = dc.Getfirstdocument
+	While Not doc Is Nothing
+		If doc.IsPackStation(0) = "N" Then
+			tmpdoc.IsPackStation = "N"
+		End If
+		
+		'判斷勾選的每份TTS明細是否有廠區和序號 add by Arno Tu 2025/01/23
+		%REM 若要更新存放位置 mark by Arno Tu 2025/02/03
+		Factory$ = doc.TSMC_DeliveryFactory(0)
+		HWSNO$ = doc.Sn(0)
+		If Factory$ = "" Or HWSNO$ = "" Then
+			MsgBox "若要填寫存放位置就必須有廠區及序號，請確保勾選的明細都有兩者"
+			Exit Sub
+		End If
+		%ENDREM
+		
+		Set doc = dc.Getnextdocument(doc)
+	Wend
+	
+	Set dc = db.Unprocesseddocuments
+	Set doc = dc.Getfirstdocument
+	
+UPD_:
+	UpdateProgress = ws.DialogBox("WorkingProgress", True, True, False, False, False, False, "更新造交機進度", tmpdoc, True)
+	If UpdateProgress = False Then Exit Sub
+	
+	'若填存放位置就要填寫放入時間
+	If tmpdoc.TSMC_InPosition(0) <> "" And tmpdoc.Delete_InPositionTime(0) <> "D" Then
+		If tmpdoc.TSMC_InPosition_Date(0) = "" Or tmpdoc.TSMC_InPosition_Time(0) = "" Then
+			MsgBox "請填寫放入時間，謝謝！"
+			GoTo UPD_
+		End If
+	End If
+	
+	'可領機通知信 add by Arno Tu 2025/02/05
+	PickNotify = False '記得移!
+	
+	While Not doc Is Nothing
+		'更新智取櫃庫存的參數 add by Arno Tu 2025/01/23
+		Factory$ = doc.TSMC_DeliveryFactory(0) '廠區
+		HWSNO$ = doc.Sn(0) '序號
+		'收貨時間
+		If tmpdoc.Delete_TSMC_ReceiveTime(0) = "D" Then '刪除
+			Set doc.TSMC_ReceiveTime_Date = Nothing
+			Set doc.TSMC_ReceiveTime_Time = Nothing
+			Call log2Itm(doc, "TSMC_EngUpdLog", "將收貨時間清空")
+		Else
+			'Date
+			If tmpdoc.TSMC_ReceiveTime_Date(0) <> "" Then
+				Call log2Itm(doc, "TSMC_EngUpdLog", "收貨日期更新--> "+tmpdoc.TSMC_ReceiveTime_Date(0))
+				doc.TSMC_ReceiveTime_Date = tmpdoc.TSMC_ReceiveTime_Date(0)
+			End If
+			
+			'Time
+			If tmpdoc.TSMC_ReceiveTime_Time(0) <> "" Then
+				Call log2Itm(doc, "TSMC_EngUpdLog", "收貨時間更新--> "+tmpdoc.TSMC_ReceiveTime_Time(0))
+				doc.TSMC_ReceiveTime_Time = tmpdoc.TSMC_ReceiveTime_Time(0)
+			End If
+		End If
+		
+		'造機完成時間
+		If tmpdoc.Delete_TSMC_InstallTime(0) = "D" Then '刪除
+			Set doc.TSMC_InstallTime_Date = Nothing
+			Set doc.TSMC_InstallTime_Time = Nothing
+			Call log2Itm(doc, "TSMC_EngUpdLog", "將造機完成時間清空")
+		Else
+			'Date
+			If tmpdoc.TSMC_InstallTime_Date(0) <> "" Then
+				Call log2Itm(doc, "TSMC_EngUpdLog", "造機完成日期更新--> "+tmpdoc.TSMC_InstallTime_Date(0))
+				doc.TSMC_InstallTime_Date = tmpdoc.TSMC_InstallTime_Date(0)
+			End If
+			
+			'Time
+			If tmpdoc.TSMC_InstallTime_Time(0) <> "" Then
+				Call log2Itm(doc, "TSMC_EngUpdLog", "造機完成時間更新--> "+tmpdoc.TSMC_InstallTime_Time(0))
+				doc.TSMC_InstallTime_Time = tmpdoc.TSMC_InstallTime_Time(0)
+			End If
+		End If
+		
+		'交機時間
+		If tmpdoc.Delete_DeliveryTime(0) = "D" Then '刪除
+			Set doc.TSMC_DeliveryTime_Date = Nothing
+			Set doc.TSMC_DeliveryTime_Time = Nothing
+			Call log2Itm(doc, "TSMC_EngUpdLog", "將交機時間清空")
+		Else
+			'Date
+			If tmpdoc.TSMC_DeliveryTime_Date(0) <> "" Then
+				Call log2Itm(doc, "TSMC_EngUpdLog", "交機日期更新--> "+tmpdoc.TSMC_DeliveryTime_Date(0))
+				doc.TSMC_DeliveryTime_Date = tmpdoc.TSMC_DeliveryTime_Date(0)
+			End If
+			
+			'Time
+			If tmpdoc.TSMC_DeliveryTime_Time(0) <> "" Then
+				Call log2Itm(doc, "TSMC_EngUpdLog", "交機時間更新--> "+tmpdoc.TSMC_DeliveryTime_Time(0))
+				doc.TSMC_DeliveryTime_Time = tmpdoc.TSMC_DeliveryTime_Time(0)
+			End If
+		End If
+		
+		'存放位置
+		'更新前檢查是否智取櫃取貨
+		If doc.IsPackStation(0) <> "N" Then
+			If tmpdoc.TSMC_InPosition(0) <> "" Then
+				If tmpdoc.TSMC_InPosition(0) = "P" Then
+					InPosition_tmp$ = "智取櫃"
+				Else
+					InPosition_tmp$ = "暫放區"
+				End If
+				
+				Call log2Itm(doc, "TSMC_EngUpdLog", "存放位置更新--> "+InPosition_tmp$)
+				
+				doc.TSMC_InPosition = tmpdoc.TSMC_InPosition(0)
+				
+				'▼▼▼▼▼▼▼▼▼▼移▼▼▼▼▼▼▼▼▼▼
+				'若更新了存放位置要寄信通知，目的是提醒User領機 add by Arno Tu 2025/02/04
+				If InPosition_tmp$ = "智取櫃" Then
+					'先檢查明細的SONO
+					SONO$ = doc.SONO(0)
+					If SONO$ = "" Then
+						Print "TTS明細無SONO，無法寄信通知領機"
+						'或許提醒Vivienne借轉出
+					Else
+						'抓SO單確認台數
+						Set SOdoc = SOview.Getdocumentbykey(SONO$, True)
+						If SOdoc Is Nothing Then
+							Print "TTS明細SONO:"+SONO$+" 查無SO單，無法寄信通知領機"
+						Else
+							'抓取SO單的主機數
+							'SO單上的數量很可能用"x1"或"X 2"來表示，且可能包含配件。
+							If InStr(SOdoc.TSMC_PORemark(0), "x") Then
+								qty% = CInt(StrRightBack(SOdoc.TSMC_PORemark(0), "x"))
+							Else
+								qty% = CInt(StrRightBack(SOdoc.TSMC_PORemark(0), "X"))
+							End If
+							
+							'檢查停機場的數量，若停機數+入的數=訂單總數，才加入至寄信通知 add by Arno Tu 2025/02/06
+							If ChkSN(Factory$, HWSNO$) Then
+								'有找到
+								QtyList(SOdoc.GmName(0)) = QtyList(SOdoc.GmName(0)) + 1
+							Else
+								'沒找到
+								QtyList(SOdoc.GmName(0)) = QtyList(SOdoc.GmName(0))
+							End If
+							
+							'入的台數+1
+							QtyList(SOdoc.GmName(0)) = QtyList(SOdoc.GmName(0)) + 1
+							
+							'若入的數量=訂單總數便可開始記錄寄信 add by Arno Tu 2025/02/06
+							If QtyList(SOdoc.GmName(0)) = qty% Then
+								'視情況決定要寄給誰
+								'用list紀錄的話，key不重複可避免寄同個人多次
+								If tmpdoc.TSMC_DeliveryFactory(0) <> "" Then
+									Factory_PNM$ = tmpdoc.TSMC_DeliveryFactory(0)
+								Else
+									Factory_PNM$ = Factory$
+								End If
+								
+								If qty% = 1 Then '1台，通知驗收負責人
+									SendList(SOdoc.GmName(0)) = SOdoc.GmName(0)+"＊"+SOdoc.GmEmail(0)+"＊"+SOdoc.TSMC_num(0)+"＊"+CStr(qty%)+"＊"+CStr(QtyList(SOdoc.GmName(0)))+"＊"+Factory_PNM$
+									'需避免重複寄信給同個客戶，先記錄等最後再寄信
+									PickNotify = True
+								ElseIf qty% > 1 Then '多台，通知採購
+									SendList(SOdoc.uname1(0)) = SOdoc.uname1(0)+"＊"+SOdoc.purchase_email(0)+"＊"+SOdoc.TSMC_num(0)+"＊"+CStr(qty%)+"＊"+CStr(QtyList(SOdoc.GmName(0)))+"＊"+Factory_PNM$
+									'需避免重複寄信給同個客戶，先記錄等最後再寄信
+									PickNotify = True
+								Else
+									Print "SO單:"+SONO$+"上的訂單備註數量有誤，無法寄信通知領機"
+								End If
+							End If
+						End If
+					End If
+				End If
+				'▲▲▲▲▲▲▲▲▲▲移▲▲▲▲▲▲▲▲▲▲
+				
+			End If
+		Else
+			Print "非智取櫃取貨，無法更新存放位置"
+		End If
+			
+			'放入時間
+			'更新前檢查是否智取櫃取貨
+			If doc.IsPackStation(0) <> "N" Then
+			If tmpdoc.Delete_InPositionTime(0) = "D" Then '刪除
+				Set doc.TSMC_InPosition_Date = Nothing
+				Set doc.TSMC_InPosition_Time = Nothing
+				Call log2Itm(doc, "TSMC_EngUpdLog", "將放入時間清空")
+			Else
+				'Date
+				If tmpdoc.TSMC_InPosition_Date(0) <> "" Then
+					Call log2Itm(doc, "TSMC_EngUpdLog", "放入日期更新--> "+tmpdoc.TSMC_InPosition_Date(0))
+					doc.TSMC_InPosition_Date = tmpdoc.TSMC_InPosition_Date(0)
+				End If
+				
+				'Time
+				If tmpdoc.TSMC_InPosition_Time(0) <> "" Then
+					Call log2Itm(doc, "TSMC_EngUpdLog", "放入時間更新--> "+tmpdoc.TSMC_InPosition_Time(0))
+					doc.TSMC_InPosition_Time = tmpdoc.TSMC_InPosition_Time(0)
+				End If
+				
+				'放入時更新智取櫃庫存 add by Arno Tu 2025/01/23 for 安宗
+				'Result$ = UpdParkingLot(Factory$, HWSNO$, "I") '廠區,序號,進/出(不用數量，因序號是key
+				If tmpdoc.TSMC_DeliveryFactory(0) <> "" Then
+					selectFactory$ = tmpdoc.TSMC_DeliveryFactory(0)
+				Else
+					selectFactory$ = Factory$
+				End If
+				
+				'Result$ = ParkingLotIn(tmpdoc, selectFactory$, HWSNO$, doc.des(0)) '廠區,序號,進/出(不用數量，因序號是key
+				'If Result$ <> "成功!" Then
+				'	Print Result$+"已入序號 "+HWSNO$+" 於廠區 "+Factory$
+				'Else
+				'	MsgBox Result$
+				'End If
+				
+			End If
+		End If
+		
+		'領機狀態
+		If tmpdoc.TSMC_IsPick(0) <> "" Then
+			doc.TSMC_IsPick = tmpdoc.TSMC_IsPick(0)
+			Call log2Itm(doc, "TSMC_EngUpdLog", "領機狀態更新--> "+tmpdoc.TSMC_IsPick(0))
+			
+			'領機時更新智取櫃庫存 add by Arno Tu 2025/01/23 for 安宗
+			'Result$ = UpdParkingLot(Factory$, HWSNO$, "O") '廠區,序號,進/出(不用數量，因序號是key
+			If tmpdoc.TSMC_DeliveryFactory(0) <> "" Then
+				selectFactory$ = tmpdoc.TSMC_DeliveryFactory(0)
+			Else
+				selectFactory$ = Factory$
+			End If
+			'Result$ = ParkingLotOut(tmpdoc, Factory$, HWSNO$, doc.des(0)) '廠區,序號,進/出(不用數量，因序號是key
+			
+		End If
+		
+		'交機廠區
+		If tmpdoc.Delete_TSMC_DeliveryFactory(0) = "D" Then '刪除
+			doc.TSMC_DeliveryFactory = ""
+			Call log2Itm(doc, "TSMC_EngUpdLog", "將交機廠區清空")
+			doc.TSMC_DeliveryArea = ""
+			Call log2Itm(doc, "TSMC_EngUpdLog", "將交機地區清空")
+		Else
+			If tmpdoc.TSMC_DeliveryFactory(0) <> "" Then
+				doc.TSMC_DeliveryFactory = tmpdoc.TSMC_DeliveryFactory(0)
+				Call log2Itm(doc, "TSMC_EngUpdLog", "交機廠區更新--> "+tmpdoc.TSMC_DeliveryFactory(0))
+				
+				'若更新廠區也一併更新地區，去TTS Profile抓定義
+				doc.TSMC_DeliveryArea = Area(ArrayGetIndex(TSMCFactory, tmpdoc.TSMC_DeliveryFactory(0)))
+				Call log2Itm(doc, "TSMC_EngUpdLog", "交機地區更新--> "+doc.TSMC_DeliveryArea(0))
+			End If
+		End If
+		
+		'部門
+		If tmpdoc.Delete_AEGroup(0) = "D" Then '刪除
+			doc.AEGroup = ""
+			Call log2Itm(doc, "TSMC_EngUpdLog", "將部門清空")
+		Else
+			If tmpdoc.AEGroup(0) <> "" Then
+				doc.AEGroup = tmpdoc.AEGroup(0)
+				Call log2Itm(doc, "TSMC_EngUpdLog", "部門更新--> "+tmpdoc.AEGroup(0))
+			End If
+		End If
+		
+		'負責工程師
+		If tmpdoc.Delete_DoEng(0) = "D" Then '刪除
+			doc.DoEng = ""
+			Call log2Itm(doc, "TSMC_EngUpdLog", "將負責工程師清空")
+		Else
+			If tmpdoc.DoEng(0) <> "" Then
+				doc.DoEng = StrRight(StrLeft(tmpdoc.DoEng(0), "/"), "=")
+				Call log2Itm(doc, "TSMC_EngUpdLog", "負責工程師更新--> "+doc.DoEng(0))
+			End If
+		End If
+		
+		Call doc.Save(True, False)
+		Set doc = dc.Getnextdocument(doc)
+	Wend
+	
+	'若有放入智取櫃則寄信通知 add by Arno Tu 2025/02/05 '記得移
+	If PickNotify = True Then
+		Call PickNotifyMail(SendList)
+	End If
+	
+End Sub
+
+%REM
+	Sub Mail2ADM
+	Description: 
+	
+	寄信通知可領機
+	Sendto:
+	驗收負責人(1台)
+	採購(多台)
+	源於SO單
+	
+	Copyto:
+	Vivienne, IT-AP
+	定義在TTS Profile
+	
+%END REM
+Sub PickNotifyMail(SendList List As String)
+	Dim s As New NotesSession
+	Dim db As NotesDatabase
+	Dim mdoc As NotesDocument
+	Dim pdoc As NotesDocument
+	Dim ritem As NotesRichTextItem
+	
+	Set db = s.Currentdatabase
+	Set pdoc = db.Getprofiledocument("SetupProfile")
+	
+	ForAll value In SendList
+		'每個Sendto一封信
+		Set mdoc = db.Createdocument
+		Set ritem = New NotesRichTextItem(mdoc, "Body") '寄信的內容
+		
+		'解析存在list的資料
+		tmparray = Split(value, "＊")
+		User$ = tmparray(0) '收件人的姓名
+		Adr$ = tmparray(1) '信件地址
+		PONO$ = tmparray(2) '訂單號
+		Qty_Max$ = tmparray(3) 'SO單上的主機總數
+		Qty_In$ = tmparray(4) '入了多少台
+		Factory$ = tmparray(5) '廠區
+		
+		mdoc.Form = "memo"
+		'mdoc.Sendto = Adr$ '驗收負責人(1台) or 採購(多台)
+		mdoc.Sendto = s.Commonusername
+		mdoc.Copyto = pdoc.CopyTo_PNM 'Vivienne, IT-AP
+		
+		'主旨
+		mdoc.Subject = "親愛的 "+User$+" 先生/小姐，您訂單號:"+PONO$+" 的主機已放入 "+Factory$+" 廠區的智能取貨櫃，煩請您前往領取，謝謝。"
+		
+		'內容
+		'Call ritem.Appendtext("因測試，故將Sendto紀錄在這避免寄出:"+Adr$)
+		'Call ritem.Addnewline(2)
+		Call ritem.Appendtext("親愛的 "+User$+" 先生/小姐，")
+		Call ritem.Addnewline(2)
+		Call ritem.Appendtext("提醒您，")
+		Call ritem.Addnewline(2)
+		Call ritem.Appendtext("您訂單號:"+PONO$+" 的主機已放入 "+Factory$+" 廠區的智能取貨櫃，")
+		Call ritem.Addnewline(2)
+		Call ritem.Appendtext("煩請您前往領取，")
+		Call ritem.Addnewline(2)
+		Call ritem.Appendtext("謝謝。")
+		
+		Call mdoc.Send(False)
+		
+	End ForAll
+	
+End Sub
+
+%REM
+	Function ChkSN
+	Description: 去停機場檢查SN有無在裡面
+%END REM
+Function ChkSN(Factory$, SN$)
+	Dim s As New NotesSession
+	Dim db As NotesDatabase
+	Dim PLview As NotesView
+	Dim PLdoc As NotesDocument
+	
+	Set db = s.Currentdatabase
+	Set PLview = db.Getview("ParkingByFac") '30.智能櫃管理\停機場管理-依廠區-PU
+	
+	PNO$ = StrLeft(Factory$,"P") + "P" + Format$(StrRight(Factory$,"P"),"000")
+	Set PLdoc = PLview.Getdocumentbykey(PNO$, True)
+	If PLdoc Is Nothing Then
+		'沒找到，視先前數量為0
+		ChkSN = False
+	Else
+		'檢查有無在停機場
+		If IsNull(ArrayGetIndex(PLdoc.SN, HWSNO$)) Then
+			'沒找到，入的數量+0
+			ChkSN = False
+		Else
+			'有找到，入的數量+1
+			ChkSN = True
+		End If
+	End If
+	
+End Function
