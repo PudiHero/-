@@ -1,0 +1,254 @@
+%REM
+	Library DebugTools
+	Created 2024/10/17 by ARNO TU/DCT
+	Description: Debug相關工具
+%END REM
+Option Public
+Use "ArrayTools"
+Use "DCT_GetBPIdbClass"
+Use "DCTBPIKeyDefsrc"
+%REM
+	Sub GotoField
+	Description: 查詢並移動至欄位
+	條件
+	1.要能開編輯模式
+	2.欄位可編輯
+	3.欄位不可藏於小節 (已可以)
+%END REM
+Sub GotoField
+	Dim s As New NotesSession
+	Dim ws As New NotesUIWorkspace
+	Dim db As NotesDatabase
+	Dim dc As NotesDocumentCollection
+	Dim uidoc As NotesUIDocument
+	Dim doc As NotesDocument
+	
+	fn$ = InputBox("請輸入欄位名稱", "選擇欄位名稱")
+	If fn$ = "" Then Exit Sub
+	
+	Set uidoc = ws.Currentdocument
+	If uidoc Is Nothing Then
+		Set db = s.Currentdatabase
+		Set dc = db.Unprocesseddocuments
+		Set doc = dc.Getfirstdocument
+		
+		If doc.Hasitem(fn$) Then
+			Call ws.Editdocument(True, doc)
+			Set uidoc = ws.Currentdocument
+			Call uidoc.Expandallsections
+			Call uidoc.Gotofield(fn$)
+		Else
+			MsgBox "查無名稱為 "+fn$+" 的欄位" ,, "錯誤"
+		End If
+	Else
+		Set doc = uidoc.Document
+		If doc.Hasitem(fn$) Then
+			uidoc.Editmode = True
+			Call uidoc.Expandallsections
+			Call uidoc.Gotofield(fn$)
+		Else
+			MsgBox "查無名稱為 "+fn$+" 的欄位" ,, "錯誤"
+		End If
+	End If
+	
+End Sub
+
+%REM
+	Sub GenNewFlow
+	Description: 修改此單的常用GenNewFlow(不存檔)
+%END REM
+Sub GenNewFlow
+	Dim ws As New NotesUIWorkspace
+	Dim uidoc As NotesUIDocument
+	Dim doc As NotesDocument
+	
+	Set uidoc = ws.Currentdocument
+	Set doc = uidoc.Document
+	
+	tmpstr$ = "step："+doc.step(0) +"@"
+	tmpstr$ = tmpstr$ + "del："+doc.del(0) +"@"
+	tmpstr$ = tmpstr$ + "dor："+doc.dor(0) +"@"
+	tmpstr$ = tmpstr$ + "dod："+doc.dod(0) +"@"
+	tmpstr$ = tmpstr$ + "yno："+doc.yno(0) +"@"
+	tmpstr$ = tmpstr$ + "Cancel："+doc.Cancel(0)
+	
+	tmparray = Split(tmpstr$, "@")
+	SelectedField = ws.Prompt (PROMPT_OKCANCELLIST, "欄位列表", "請選擇欄位", tmparray(0), tmparray)
+	If SelectedField = "" Then Exit Sub
+	
+	Value$ = InputBox("請輸入要修改的值", "設定欄位值", StrRight(SelectedField, "："))
+	
+	Call doc.Replaceitemvalue(StrLeft(SelectedField, "："), Value$)
+	
+End Sub
+
+%REM
+	Sub EditField
+	Description: 顯示表單內所有欄位供選擇，選擇後輸入值作修改(不存檔)
+%END REM
+Sub EditField
+	Dim ws As New NotesUIWorkspace
+	Dim uidoc As NotesUIDocument
+	Dim doc As NotesDocument
+	Dim item As NotesItem
+	
+	Set uidoc = ws.Currentdocument
+	Set doc = uidoc.Document
+	
+	fnArray = Evaluate(|""|)
+	ForAll i In doc.Items
+		Set item = i
+		fnArray = FullTrim(ArrayAppend(fnArray, item.Name))		
+	End ForAll
+	fnArray = SortArray(fnArray)
+	
+	SelectedField = ws.Prompt (PROMPT_OKCANCELLIST, "欄位名稱列表", "請選擇欄位", fnArray(0), fnArray)
+	If SelectedField = "" Then Exit Sub
+	
+	Set item = doc.Getfirstitem(SelectedField)
+	Value = InputBox("請輸入要修改的值", "修改值", item.Values(0))
+	If Value = "" Then Exit Sub
+	
+	Call doc.Replaceitemvalue(item.Name, Value)
+	
+End Sub
+
+%REM
+	Sub SearchSNO
+	Description: 查詢此單的對應流水號並開啟view
+%END REM
+Sub SearchSNO
+	Dim ws As New NotesUIWorkspace
+	Dim uidoc As NotesUIDocument
+	Dim doc As NotesDocument
+	
+	Dim BPIPara As New DCT_BPIdbClass(SNdbBPIKey)
+	Dim SNOdb As New NotesDatabase(BPIPara.svrname, BPIPara.dbname)
+	Dim SNOview As NotesView
+	Dim SNOdoc As NotesDocument
+	
+	Set uidoc = ws.Currentdocument
+	Set doc = uidoc.Document
+	SearchKey$ = StrLeft(doc.SerialNo(0), "-") + "-"
+	
+	Set SNOview = SNOdb.Getview("sno") '(當月sno-PU)
+	Set SNOdoc = SNOview.Getdocumentbykey(SearchKey$, True)
+	If SNOdoc Is Nothing Then
+		Set SNOview = SNOdb.Getview("sno-UU") 'Adm\sno-UU
+		Set SNOdoc = SNOview.Getdocumentbykey(SearchKey$, True)
+		ViewName = SNOview.Name
+	Else
+		ViewName = SNOview.Aliases(0)
+	End If
+	
+	Call ws.Opendatabase(SNOdb.Server, SNOdb.Filepath, ViewName, SearchKey$)
+	
+End Sub
+%REM
+	Sub StepYNO
+	Description: 依流程定義文件設定step及yno(不存檔)
+%END REM
+Sub StepYNO
+	Dim s As New NotesSession
+	Dim ws As New NotesUIWorkspace
+	Dim uidoc As NotesUIDocument
+	Dim doc As NotesDocument
+	
+	Dim NSDdb As NotesDatabase
+	Dim NSDview As NotesView
+	Dim NSDdoc As NotesDocument
+	
+	Set uidoc = ws.Currentdocument
+	Set doc = uidoc.Document
+	
+	InputStep$ = InputBox("請輸入step", "step", doc.step(0))
+	If InputStep$ = "" Then Exit Sub
+	
+	Set NSDdb = s.Getdatabase("RD/DCT", "DCT\DCT_NSD.nsf") '彩虹
+	Set NSDview = NSDdb.Getview("ALLFlow") 'ALLNewFlow(Idx used)-PU
+	
+	Ftype$ = StrLeft(doc.SerialNo(0), "-")
+	SearchKey$ = Ftype$+"DEV*"+InputStep$ 'SODEV*10
+	Set NSDdoc = NSDview.Getdocumentbykey(SearchKey$, True)
+	
+	If NSDdoc Is Nothing Then
+		MsgBox "查無流程定義文件，Key："+SearchKey$
+	Else
+		doc.step = InputStep$
+		doc.yno = NSDdoc.yno(0)
+		Call uidoc.Refresh
+	End If
+	
+End Sub
+
+%REM
+	Sub EditSuggest
+	Description: 修改此單的意見(不存檔)
+%END REM
+Sub EditSuggest
+	Dim ws As New NotesUIWorkspace
+	Dim uidoc As NotesUIDocument
+	Dim doc As NotesDocument
+	
+	Set uidoc = ws.Currentdocument
+	Set doc = uidoc.Document
+	
+	tmparray = doc.suggest
+	SelectedField = ws.Prompt (PROMPT_OKCANCELLIST, "Log列表", "請選擇Log", tmparray(0), tmparray)
+	If SelectedField = "" Then Exit Sub
+	
+	LogStr$ = InputBox("請輸入要修改的值(空白為刪除)", "設定Log值", SelectedField)
+	
+	index% = ArrayGetIndex(tmparray, SelectedField)
+	tmparray(index%) = LogStr$
+	tmparray = FullTrim(tmparray) '若LogStr輸入空白便可刪除
+	
+	doc.suggest = tmparray
+	
+End Sub
+
+%REM
+	Sub ShowAllStep
+	Description: 顯示所有流程點並提供開啟流程定義文件
+%END REM
+Sub ShowAllStep
+	Dim s As New NotesSession
+	Dim ws As New NotesUIWorkspace
+	Dim uidoc As NotesUIDocument
+	Dim doc As NotesDocument
+	
+	Dim NSDdb As NotesDatabase
+	Dim NSDview As NotesView
+	Dim NSDdc As NotesDocumentCollection
+	Dim NSDdoc As NotesDocument
+	
+	Set uidoc = ws.Currentdocument
+	Set doc = uidoc.Document
+	
+	Set NSDdb = s.Getdatabase("RD/DCT", "DCT\DCT_NSD.nsf")
+	Set NSDview = NSDdb.Getview("ALLFlow") 'ALLNewFlow(Idx used)-PU
+	
+	Ftype$ = StrLeft(doc.SerialNo(0), "-")
+	SearchKey$ = Ftype$+"DEV*" 'SODEV*
+	Set NSDdc = NSDview.Getalldocumentsbykey(SearchKey$, False)
+	If NSDdc.Count = 0 Then
+		MsgBox "查無流程點", 0, "錯誤"
+		Exit Sub
+	End If
+	
+	Set NSDdoc = NSDdc.Getfirstdocument
+	While Not NSDdoc Is Nothing
+		tmpstr$ = tmpstr$ + NSDdoc.ftype(0)+"*"+NSDdoc.step(0)+"@"
+		
+		Set NSDdoc = NSDdc.Getnextdocument(NSDdoc)
+	Wend
+	
+	steparray = Split(tmpstr$, "@")
+	steparray = SortArray(steparray)
+	SelectedField = ws.Prompt (PROMPT_OKCANCELLIST, "流程點列表", "請選擇流程點", steparray(0), steparray)
+	If SelectedField = "" Then Exit Sub
+	
+	Set NSDdoc = NSDview.Getdocumentbykey(SelectedField, True)
+	Call ws.Editdocument(True, NSDdoc, False)
+	
+End Sub
