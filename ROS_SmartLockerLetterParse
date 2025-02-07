@@ -1,0 +1,621 @@
+%REM
+	Agent 台積電智取櫃領機通知信解析
+	Created 2025/1/6 by ARNO TU/DCT
+	Description:
+	
+	此為每30分鐘執行1次的排程
+	解析所有SMTPIN內TTS資料夾的所有台積電領機信
+	解析完丟出資料夾
+	
+	解析台積信件內容，
+	需比對資料是否正確，
+	1.PO單號
+	2.電腦名稱
+	3.保管人
+	如1個序號對應1個單。
+	注意可能一封信件內可能有多台電腦。
+	
+	Warning:
+	1.無LDNO，可能為一般轉智取
+	2.無SONO，要轉SO
+	3.TTS明細重複解析
+	
+	測試此Agent步驟
+	1.在自己信箱新增3個資料夾
+	
+	2.到SMTPIN找領機信
+	
+	2025/02/03 更新Debug_mode
+	Debug_mode = True 為測試模式
+	Debug_mode = False 為正式模式
+	測試成功後複製此agent
+	並將mode改False即可上線
+	
+%END REM
+Option Public
+Use "DCT_GetBPIDbClass"
+Use "DCTBPIKeyDefSrc"
+Use "LogTools"
+Use "ParkingLotTools" '用來更新智取櫃庫存管理文件 add by Arno Tu 2025/01/23
+Sub Initialize
+	Dim s As New NotesSession
+	Dim db As NotesDatabase
+	Dim PickTime As NotesDateTime
+	
+	Dim mdoc As NotesDocument
+	Dim ritem As NotesRichTextItem '被解析的信件body
+	Dim ritem_result As NotesRichTextItem '信件解析結果
+	Dim rtItem_Mail As NotesRichTextItem 'TTS明細的信件鏈結
+	
+	'收發台積電信件的資料庫
+	Dim Maildb As NotesDatabase
+	Dim Mailview As NotesView
+	Dim Maildoc As NotesDocument
+	
+	'TTS
+	Dim TTSdb As NotesDatabase
+	Dim TTSview As NotesView
+	Dim TTSdc As NotesDocumentCollection
+	Dim TTSdoc As NotesDocument
+	Dim TTSpdoc As NotesDocument
+	
+	'SO
+	Dim SOdb As NotesDatabase
+	Dim SOview As NotesView
+	Dim SOdc As NotesDocumentCollection
+	Dim SOdoc As NotesDocument
+	
+	'LD
+	Dim LDdb As NotesDatabase
+	Dim LDview As NotesView
+	Dim LDdoc As NotesDocument
+	
+	Print "台積電領機通知信解析 Start...."
+	On Error GoTo ErrHandle_ 	'有任何錯誤，都print error
+	
+	Set db = s.CurrentDatabase
+	
+	'測試模式/正式模式 add by Arno Tu 2025/02/03
+	Debug_mode = True
+	
+	'抓領機通知信
+	Set Maildb = s.Currentdatabase '放置此Agent的Maildb
+	Set Mailview = Maildb.Getview("TTS-Unprocessed") '信箱的資料夾
+	Set Maildoc = Mailview.Getfirstdocument
+	If Maildoc Is Nothing Then
+		Print "找不到要解析的信件"
+		'Exit Sub
+	End If
+	
+	If Debug_mode Then '測試模式/正式模式 add by Arno Tu 2025/02/03
+		'抓RD的資料
+		Set TTSdb = s.Getdatabase("RD/DCT", "Developing\DCT_TTS_2.NSF")
+	Else
+		'抓線上的資料
+		Set BPIPara = New DCT_BPIdbClass(TTSDBBPIKEY)
+		Set TTSdb = New NotesDatabase(BPIPara.SvrName , BPIPara.DBName)
+	End If
+	
+	Set TTSview = TTSdb.Getview("BySN") '依序號-PU
+	Set TTSpdoc = TTSdb.Getprofiledocument("SetupProfile")
+	
+	Set BPIPara = New DCT_BPIdbClass(SODBBPIKEY)
+	Set SOdb = New NotesDatabase(BPIPara.SvrName , BPIPara.DBName)
+	Set SOview = SOdb.Getview("ByPONum") 'Adm\依客戶訂單號(2年內)-PU
+	
+	Set BPIPara = New DCT_BPIdbClass(PSDCDBBPIKEY)
+	Set LDdb = New NotesDatabase(BPIPara.SvrName , BPIPara.DBName)
+	Set LDview = LDdb.Getview("bysno_uncate") 'ADM\依相關單號(無分類)-PU
+	
+	While Not Maildoc Is Nothing
+		'先檢查完成的Flag add by Arno Tu 2025/01/20
+		If Maildoc.NotesDone(0) = "Y" Then
+			Print "偵測到重覆解析的信件，跳過不處理並移至Error資料夾"
+			Maildoc.Removefromfolder("TTS-Unprocessed")
+			Maildoc.Putinfolder("TTS-Error")
+			If Debug_mode = False Then '測試模式/正式模式 add by Arno Tu 2025/02/03
+				GoTo SKIP_
+			End If
+		End If
+		
+		Set mdoc = db.CreateDocument
+		
+		SONOarray = Evaluate(|""|) '記錄是否有重複SO單號
+		ChangeLog = Evaluate(|""|) '紀錄所有修改
+		Subject_ChangeArray = Evaluate(|""|) '信件主旨提醒修改哪些
+		MultiUpd = False '偵測重複解析
+		Warning = False '偵測異常資料 add by Arno Tu 2025/01/22
+		
+		'開始解析信件內容
+		Set ritem = Maildoc.Getfirstitem("Body")
+		Set ritem_result = New NotesRichTextItem(mdoc, "Body") '寄信的內容
+		
+		DeliveryTime$ = StrLeft(StrRight(ritem.Text, "您已於 "), " 在") '領機時間
+		Factory$ = StrRight(StrLeft(ritem.Text, " 智取櫃領取電腦"), "在 ") '廠區
+		
+		'用PO分段判斷有幾台電腦，1台分2段，n台分n+1段
+		tmparray = Split(StrLeft(ritem.Text, "提醒:"), "PO:")
+		PCcount% = UBound(tmparray)
+		Call ritem_result.Appendtext("您好：")
+		Call ritem_result.Addnewline(2)
+		Print "信件主旨:" + Maildoc.Subject(0)
+		
+		'先算該PO有無對應多筆SO
+		For i = 1 To PCcount%
+			PONO$ = FullTrim(Replace(StrLeft(tmparray(i), "電腦名稱:"), Chr(13), ""))
+			'用PO單號找SO
+			Set SOdoc = SOview.Getdocumentbykey(StrLeft(PONO$, " -"), True)
+			If Not SOdoc Is Nothing Then
+				SONO$ = SOdoc.SerialNo(0)
+				SONOarray = FullTrim(ArrayAppend(SONOarray, SONO$))
+			End If
+		Next
+		
+		SONOarray = ArrayUnique(SONOarray) '去重複
+		SONOcount% = UBound(SONOarray) '不重複數量
+		If SONOcount% > 0 Then
+			Call ritem_result.Appendtext("提醒：該 PO對應多筆SO，請與業務確認應對應銷帳之SO後協助完成以下作業：")
+			Call ritem_result.Addnewline(1)
+		End If
+		
+		Print "這封信共有 " + CStr(PCcount%) + "台電腦，請依據SO對應之LD完成該SO借轉出銷帳作業。"
+		
+		Call ritem_result.Appendtext("這封信")
+		Call ritem_result.Appenddoclink(Maildoc, "台積電領機信") '附領機信於解析信 add by Arno Tu 2025/01/17
+		Call ritem_result.Appendtext("共有 "+CStr(PCcount%)+"台電腦，請依據SO對應之LD完成該SO借轉出銷帳作業。")
+		Call ritem_result.Addnewline(1)
+		Call ritem_result.Appendtext("請於JCAN流程完成後，並於TTS中更新狀態。")
+		Call ritem_result.Addnewline(2)
+		
+		'裁減整理出資訊
+		For i = 1 To PCcount%
+			Call ritem_result.Appendtext("------------------"+i+"------------------")
+			Call ritem_result.Addnewline(1)
+			'PO單號
+			PONO$ = FullTrim(Replace(StrLeft(tmparray(i), "電腦名稱:"), Chr(13), ""))
+			'電腦名稱
+			Hostname$ = FullTrim(Replace(StrLeft(StrRight(tmparray(i), "電腦名稱:"), "硬體序號:"), Chr(13), ""))
+			'硬體序號
+			HWSNO$ = FullTrim(Replace(StrLeft(StrRight(tmparray(i), "硬體序號:"), "母版:"), Chr(13), ""))
+			'母版
+			OS$ = FullTrim(Replace(StrLeft(StrRight(tmparray(i), "母版:"), "保管人:"), Chr(13), ""))
+			'保管人
+			Owner$ = FullTrim(Replace(StrRight(tmparray(i), "保管人:"), Chr(13), ""))
+			
+			Call ritem_result.Appendtext("PO單號:"+PONO$)
+			Call ritem_result.Addnewline(1)
+			
+			'用硬體序號找明細
+			Set TTSdc = TTSview.Getalldocumentsbykey(HWSNO$, True)
+			If TTSdc.Count = 0 Then
+				Call ritem_result.Appendtext("查無硬體序號:"+HWSNO$+" 的明細，請確認此序號是否正確")
+				Call ritem_result.Addnewline(1)
+				Maildoc.Removefromfolder("TTS-Unprocessed")
+				Maildoc.Putinfolder("TTS-Error")
+				GoTo SKIP_
+				Warning = True
+			ElseIf TTSdc.Count > 1 Then
+				Call ritem_result.Appendtext("偵測到多筆明細重複使用硬體序號，"+HWSNO$+" 的明細，請確認此序號是否正確")
+				Call ritem_result.Addnewline(1)
+				Maildoc.Removefromfolder("TTS-Unprocessed")
+				Maildoc.Putinfolder("TTS-Error")
+				GoTo SKIP_
+				Warning = True
+			End If
+			Set TTSdoc = TTSdc.Getfirstdocument
+			
+			'檢查電腦名稱
+			If TTSdoc.TSMC_ComputerName(0) <> Hostname$ Then '電腦名稱不一致
+				ChangeStr$ = "電腦名稱:"+TTSdoc.TSMC_ComputerName(0)+" 更新--> "+Hostname$
+				ChangeLog = FullTrim(ArrayAppend(ChangeLog, ChangeStr$))
+				Call ritem_result.Appendtext(ChangeStr$)
+				TTSdoc.TSMC_ComputerName = Hostname$
+			Else
+				Call ritem_result.Appendtext("電腦名稱:"+Hostname$)
+			End If
+			Call ritem_result.Addnewline(1)
+			
+			Call ritem_result.Appendtext("硬體序號:"+HWSNO$)
+			Call ritem_result.Addnewline(1)
+			Call ritem_result.Appendtext("母版:"+OS$)
+			Call ritem_result.Addnewline(1)
+			
+			'檢查保管人
+			If TTSdoc.TSMC_CustosName(0) <> "" Then
+				If TTSdoc.TSMC_CustosName(0) <> Owner$ Then '保管人不一致
+					ChangeStr$ = "保管人:"+TTSdoc.TSMC_CustosName(0)+" 更新--> "+Owner$
+					ChangeLog = FullTrim(ArrayAppend(ChangeLog, ChangeStr$))
+					Call ritem_result.Appendtext(ChangeStr$)
+					TTSdoc.TSMC_CustosName = Owner$
+				Else
+					Call ritem_result.Appendtext("保管人:"+Owner$)
+				End If
+			Else '保管人為空
+				'更新明細上的保管人
+				ChangeStr$ = "保管人:　更新--> "+Owner$
+				ChangeLog = FullTrim(ArrayAppend(ChangeLog, ChangeStr$))
+				Call ritem_result.Appendtext(ChangeStr$)
+				TTSdoc.TSMC_CustosName = Owner$
+			End If
+			Call ritem_result.Addnewline(1)
+			
+			'檢查廠區
+			If TTSdoc.TSMC_DeliveryFactory(0) <> Factory$ Then '廠區不一致
+				ChangeStr$ = "廠區:"+TTSdoc.TSMC_DeliveryFactory(0)+" 更新--> "+Factory$
+				ChangeLog = FullTrim(ArrayAppend(ChangeLog, ChangeStr$))
+				Call ritem_result.Appendtext(ChangeStr$)
+				TTSdoc.TSMC_DeliveryFactory = Factory$
+			Else
+				Call ritem_result.Appendtext("廠區:"+Factory$)
+			End If
+			Call ritem_result.Addnewline(1)
+			
+			'用PO單號找SO
+			Set SOdoc = SOview.Getdocumentbykey(StrLeft(PONO$, " -"), True)
+			If SOdoc Is Nothing Then
+				Call ritem_result.Appendtext("SO單號:(尚未轉SO)")
+				'Warning = True 未轉SO會在主旨提醒，Warning會無法存檔 mark by Arno Tu 2025/02/04
+			Else
+				'檢查SO的PO單號是否與明細的單號吻合
+				If TTSdoc.num(0) <> SOdoc.TSMC_num(0) Then
+					ChangeStr$ = "PO單號:"+TTSdoc.num(0)+" 更新--> "+SOdoc.TSMC_num(0)
+					ChangeLog = FullTrim(ArrayAppend(ChangeLog, ChangeStr$))
+					Call ritem_result.Appendtext(ChangeStr$)
+					TTSdoc.num = SOdoc.TSMC_num(0)
+					Call ritem_result.Addnewline(1)
+				End If
+				
+				SONO$ = SOdoc.SerialNo(0)
+				Call ritem_result.Appendtext("SO單號:"+SONO$)
+				Call ritem_result.Appenddoclink(SOdoc, "SO單")
+				
+			End If
+			Call ritem_result.Addnewline(1)
+			
+			'用LDNO和DCNO抓
+			LDNO$ = TTSdoc.LDNO(0)
+			If LDNO$ = "" Then 'add by Arno Tu 2025/01/21 防止無LDNO進SearchKey
+				Call ritem_result.Appendtext("LD單號:(無)-注意是否為<人工交機轉智取櫃>!!!")
+				Warning = True
+			Else
+				SearchKey_LD = Evaluate(|""|)
+				SearchKey_LD = FullTrim(ArrayAppend(SearchKey_LD, LDNO$))
+				SearchKey_LD = FullTrim(ArrayAppend(SearchKey_LD, TTSdoc.LD_DCNO(0)))
+				Set LDdoc = LDview.Getdocumentbykey(SearchKey_LD, True)
+				If LDdoc Is Nothing Then
+					Call ritem_result.Appendtext("LD單號:(無)-注意是否為<人工交機轉智取櫃>!!!")
+					Warning = True
+				Else
+					Call ritem_result.Appendtext("LD單號:"+LDNO$)
+					Call ritem_result.Appenddoclink(LDdoc, "LD單")
+				End If
+			End If
+			Call ritem_result.Addnewline(1)
+			
+			'檢驗完後更新領機狀態
+			'是否已領機是已有無放上驗收單pdf，信件本身便可當作驗收單，因此可無領機狀態的欄位
+			TTSdoc.TSMC_IsPick = "Y"
+			Set PickTime = New NotesDateTime(DeliveryTime$)
+			TTSdoc.TSMC_PickTime = PickTime.Lslocaltime '改傳入時間而非文字 mod by Arno Tu 2025/01/16
+			Set rtItem_Mail = New NotesRichTextItem(TTSdoc, "TSMC_MailLink") ' 替換欄位名稱
+			Call rtItem_Mail.AppendDocLink(Maildoc, "台積電領機通知信")
+			
+			Call ritem_result.Appendtext("領機狀態:已領機")
+			Call ritem_result.Addnewline(1)
+			Call ritem_result.Appendtext("領機時間:"+DeliveryTime$)
+			Call ritem_result.Addnewline(2)
+			
+			Call ritem_result.Appendtext("TTS TSMC品項明細文件鏈結:")
+			Call ritem_result.Appenddoclink(TTSdoc, "TTS明細")
+			Call ritem_result.Addnewline(1)
+			
+			'檢查TTSdoc的Flag，判斷是否有被解析更新過 add by Arno Tu 2025/01/20
+			If Warning = False Then '被警告的話不存檔 add by Arno Tu 2025/01/22
+				If TTSdoc.MailUpd(0) = "Y" Then
+					Call ritem_result.Appendtext("此TTS明細已被解析過，不更新")
+					MultiUpd = True
+					If Debug_mode = True Then '測試模式可以繼續執行 add by Arno Tu 2025/02/04
+						GoTo PASS_
+					End If
+				Else
+PASS_:
+					TTSdoc.MailUpd = "Y"
+					Call TTSdoc.Save(True, False)
+					
+					' mark by Arno Tu 2025/02/03 先關等更新
+					'呼叫Function 在存貨上作增減 add by Arno Tu 2025/01/23 For 安宗
+					Result$ = UpdParkingLot(Factory$, HWSNO$, "O") '廠區,序號,進/出(不用數量，因序號是key
+					If Result$ = "成功!" Then
+						Print Result$+"已出序號 "+HWSNO$+" 於廠區 "+Factory$
+					Else
+						'錯誤
+					End If
+					
+					'改用 function mod by Arno Tu 2025/02/03
+					Result_Maildoc2pdf$ = Maildoc2pdf(Maildoc, TTSdoc)
+					If Result_Maildoc2pdf$ <> "成功!" Then
+						Print Result_Maildoc2pdf$
+					End If
+					
+					%REM 舊的打算，整合進此排程
+					'將解析完的領機信轉pdf檔 add by Arno Tu 2025/01/23 for Tommy
+					Set agent = db.Getagent("ROS_Mail2pdf") 'Java agent
+					If agent.Runonserver(Maildoc.Noteid) <> 0 Then
+						Print "ROS_Mail2pdf有誤"
+					End If
+					%ENDREM
+						
+					End If
+				End If
+				Call ritem_result.Addnewline(1)
+			Next
+			
+			'多筆不同SO單號要修改主旨
+			If SONOcount% > 0 Then
+				'信件內容要修改
+				SONO$ = Join(SONOarray, " / ")
+			End If
+			
+			If SONO$ = "" Then '避免未轉SO導致信件主旨看起來有空缺 add by Arno Tu 2025/02/04
+				SONO$ = "尚未轉SO"
+			End If
+			
+			'若有修改，下修改Flag至明細並log修改紀錄  add by Arno Tu 2025/01/20
+			If ChangeLog(0) <> "" Then
+				
+				ForAll LogStr In ChangeLog
+					Call Log2Itm(TTSdoc, "adm_log", CStr(LogStr))
+					Subject_ChangeArray = FullTrim(ArrayAppend(Subject_ChangeArray, StrLeft(LogStr, ":")))
+				End ForAll
+				
+				'去重複
+				Subject_ChangeArray = ArrayUnique(Subject_ChangeArray)
+				
+				If Debug_mode Then '測試模式/正式模式 add by Arno Tu 2025/02/03
+					Subject$ = "(測試)TSMC PO ["+PONO$+"]領取信已解析成功，請協助（"+SONO$+"）借轉出銷帳作業，異動項目:"+Join(Subject_ChangeArray, ",")
+				Else
+					Subject$ = "TSMC PO ["+PONO$+"]領取信已解析成功，請協助（"+SONO$+"）借轉出銷帳作業，異動項目:"+Join(Subject_ChangeArray, ",")
+				End If
+				
+			Else '明細沒被修改
+				If Debug_mode Then '測試模式/正式模式 add by Arno Tu 2025/02/03
+					Subject$ = "(測試)TSMC PO ["+PONO$+"]領取信已解析成功，請協助（"+SONO$+"）借轉出銷帳作業"
+				Else
+					Subject$ = "TSMC PO ["+PONO$+"]領取信已解析成功，請協助（"+SONO$+"）借轉出銷帳作業"
+				End If
+				
+			End If
+			
+			If MultiUpd Then '若重複解析則主旨提醒 add by Arno Tu 2025/01/20
+				Subject$ = Subject$ + "(偵測到重複解析)"
+			End If
+			
+			If Warning Then
+				Subject$ = Subject$ + "【無LDNO請手動確認處理】"
+			End If
+			
+	%REM
+		If Warning$ <> "" Then '若無LDNO則主旨再警告 add by Arno Tu 2025/01/21
+			Subject$ = Subject$ + "【"
+			
+			If InStr(Warning$, "1") <> 0 Then
+				Subject$ = Subject$ + ""
+			End If
+			
+			If InStr(Warning$, "2") <> 0 Then
+				Subject$ = Subject$ + "無LDNO請手動確認處理"
+			End If
+			
+			If InStr(Warning$, "3") <> 0 Then
+				Subject$ = Subject$ + ""
+			End If
+			
+			Subject$ = Subject$ + "】"
+			Subject$ = Subject$ + "【無LDNO請手動確認處理】"
+		End If
+	%END REM
+			
+			If Debug_mode Then '測試模式/正式模式 add by Arno Tu 2025/02/03
+				SendTo = "ARNO TU/DCT" '測試者自己修改
+			Else
+				SendTo = TTSpdoc.TSMC_Delivery_SendTo
+				CopyTo = TTSpdoc.TSMC_Delivery_CopyTo
+			End If
+			
+			'執行結果寄信
+			Call Mail2ADM(mdoc, Subject$, SendTo, CopyTo)
+			
+			'下完成的Flag並移出資料夾
+			Maildoc.NotesDone = "Y"
+			Call Maildoc.Save(True, False)
+			
+			Maildoc.Removefromfolder("TTS-Unprocessed")
+			If Warning Then '異常的丟Error add by Arno Tu 2025/01/21
+				Maildoc.Putinfolder("TTS-Error")
+			Else
+				Maildoc.Putinfolder("TTS-Successed")
+			End If
+			
+SKIP_:
+			Set Maildoc = Mailview.Getfirstdocument
+		Wend
+		
+		Print "台積電領機通知信解析 End...."
+		Exit Sub
+		
+ErrHandle_:  '有error會來這
+		
+		'將當前解析錯誤的信丟至Error資料夾 2025/01/20
+		If Not Maildoc Is Nothing Then
+			Maildoc.Removefromfolder("TTS-Unprocessed")
+			Maildoc.Putinfolder("TTS-Error")
+		End If
+		
+		If Debug_mode Then '測試模式/正式模式 add by Arno Tu 2025/02/03
+			SendTo = "ARNO TU/DCT" '測試者自己修改
+			Subject$ = "(測試)【TTS】Agent:台積電智取櫃領機通知信解析 有錯誤"
+		Else
+			SendTo = TTSpdoc.ErrorMail_SendTo
+			Subject$ = "【TTS】Agent:台積電智取櫃領機通知信解析 有錯誤"
+		End If
+		
+		ErrorStr$ = "台積電領機通知信解析(Initialize)-Error_" + CStr(Err) + ":" + Error$ + " at line " + CStr(Erl)  'print出error 在那，是什麼error
+		Print ErrorStr$
+		
+		Call ritem_result.Addnewline(2)
+		Call ritem_result.Appendtext(ErrorStr$)
+		Call Mail2ADM(mdoc, Subject$, SendTo, CopyTo)
+		
+		Exit Sub	'有error 寄信完跳出
+		
+End Sub
+	
+%REM
+	Sub Mail2ADM
+	Description:
+	寄送執行結果或錯誤信件
+%END REM
+Sub Mail2ADM(mdoc As NotesDocument, Subject$, SendTo, CopyTo)
+	Dim s As New NotesSession
+	
+	mdoc.Form = "memo"
+	mdoc.Principal = "訊達系統通知"
+	mdoc.Subject = Subject$
+	
+	mdoc.SendTo = SendTo
+	mdoc.CopyTo = CopyTo
+	
+	Call mdoc.Send(False)
+	
+End Sub
+
+%REM
+	Function Maildoc2pdf
+	Description:
+	
+	領機信轉pdf檔
+	此function將用CMD呼叫Python
+	
+	1.將傳入的領機信轉成pdf檔
+	2.嵌入TTS明細
+	3.成功嵌入後刪除pdf檔
+	
+%END REM
+Function Maildoc2pdf(Maildoc As NotesDocument, TTSdoc As NotesDocument)
+	'檢查傳入的參數 add by Arno Tu 2025/02/03
+	If Maildoc Is Nothing Then
+		ErrorStr$ = "無傳入台積電領機信"
+		GoTo ERROR_
+	ElseIf TTSdoc Is Nothing Then
+		ErrorStr$ = "無傳入TTS明細"
+		GoTo ERROR_
+	End If
+	
+	'---已成功產生pdf檔並回傳路徑後---
+	'執行完CMD呼叫Python後可能需要sleep?
+	
+	pdfPath$ = "D:\TEST.pdf" '測試用 add by Arno Tu 2025/02/04
+	
+	'檢查有無產生路徑 add by Arno Tu 2025/02/03
+	If pdfPath$ = "" Then
+		ErrorStr$ = "無pdf檔路徑"
+		GoTo ERROR_
+	End If
+	
+	'呼叫嵌入Function add by Arno Tu 2025/02/04
+	If embedpdf(TTSdoc, pdfPath$) <> "成功嵌入領機信pdf檔!" Then
+		ErrorStr$ = "TTS明細嵌入pdf檔失敗"
+		GoTo ERROR_
+	End If
+	
+	Maildoc2pdf = "成功嵌入領機信pdf檔!"
+	Exit Function
+	
+ERROR_:
+	
+	Maildoc2pdf = "<Function>Maildoc2pdf:"+ErrorStr$
+	
+End Function
+
+
+%REM
+	Function embedpdf
+	Description:
+	
+	嵌入pdf
+	
+	1.嵌入TTS明細
+	2.成功嵌入後刪除pdf檔
+	
+	關於pdf路徑
+	要注意測試時是用自己本地端的路徑
+	但正式是用Server端的路徑
+	Server的執行環境為Linus (Deb 10)
+	
+%END REM
+Function embedpdf(TTSdoc As NotesDocument, pdfPath$)
+	Dim rtitem As NotesRichTextItem
+	Dim embedObj As NotesEmbeddedObject
+	
+	'檢查傳入的參數 add by Arno Tu 2025/02/04
+	If TTSdoc Is Nothing Then
+		ErrorStr$ = "無傳入TTS明細"
+		GoTo ERROR_
+	ElseIf pdfPath$ = "" Then
+		ErrorStr$ = "無傳入pdf檔路徑"
+		GoTo ERROR_
+	End If
+	
+	'抓驗收單欄位 add by Arno Tu 2025/02/03
+	Set rtitem = TTSdoc.GetFirstItem("TSMC_AcceptAtt") '若在這就抓到則代表已有附件，這在線上應屬於異常
+	If rtitem Is Nothing Then '沒有再建，這樣還可以重複測試
+		Set rtitem = TTSdoc.Createrichtextitem("TSMC_AcceptAtt")
+	Else
+		Print "有抓到TTS明細的驗收單欄位，若此非測試執行則需注意是否已有附件"
+	End If
+	
+	'If IsObject(rtitem) = False Then
+	If rtitem Is Nothing Then
+		ErrorStr$ = "TTS明細無驗收單欄位"
+		GoTo ERROR_
+	Else
+		'嵌入並存檔
+		'測試要先刪資料否則附件越來越多
+		ForAll obj In rtitem.Embeddedobjects
+			Set embedObj = obj
+			Call embedObj.Remove
+		End ForAll
+		Call rtitem.EmbedObject(EMBED_ATTACHMENT, "", pdfPath$)
+		Call TTSdoc.Save(True, False)
+	End If
+	
+	'檢查被嵌入的欄位 add by Arno Tu 2025/02/03
+	objarray = rtitem.Embeddedobjects
+	Set embedObj = objarray(0)
+	
+	objname$ = embedObj.Name '嵌入的pdf檔名
+	filename$ = StrRightBack(pdfPath$, "\") '路徑檔名
+	
+	'比對嵌入的pdf檔名與路徑檔名
+	If objname$ = filename$ Then
+		'嵌入成功，已在TTS明細的驗收單欄位嵌入附件
+		Set fileSys = CreateObject("Scripting.FileSystemObject")
+		If fileSys.FileExists(pdfPath$) Then
+			'開始刪除pdf檔
+			'備註:被刪除的檔案不會出現在垃圾桶內，請小心!
+			fileSys.DeleteFile pdfPath$, True
+		End If
+	Else
+		'嵌入失敗，TTS明細的驗收單欄位無附件
+		ErrorStr$ = "TTS明細嵌入pdf檔失敗，檔案路徑:"+pdfPath$
+		GoTo ERROR_
+	End If
+	
+	embedpdf = "成功嵌入領機信pdf檔!"
+	Exit Function
+	
+ERROR_:
+	
+	embedpdf = ErrorStr$
+	
+End Function
