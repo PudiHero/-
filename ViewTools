@@ -1,0 +1,249 @@
+%REM
+	Library ViewTools
+	Created 2024/8/30 by ARNO TU/DCT
+	Description: View相關工具
+%END REM
+Option Public
+
+%REM
+	Function GetColumnValues
+	Description: 依直欄名稱回傳該直欄所有值
+%END REM
+Function GetColumnValues(view As NotesView, Key)
+	Dim vc As NotesViewColumn
+	
+	'判斷Key為數字或字串
+	If IsNumeric(Key) Then
+		'數字，直接取值
+		If Key > view.Columncount Or Key < 0 Then
+			ErrorStr$ = "傳入的index超出範圍"
+			GoTo ERRORPRINT_
+		End If
+		
+		GetColumnValues = view.GetColumnValues(Key)
+		Exit Function
+	Else
+		'字串，要先確認名稱
+		ColumnArray = view.Columns
+		
+		'抓取該view所有直欄
+		For i = 0 To UBound(ColumnArray)
+			Set vc = ColumnArray(i)
+			
+			If vc.Title = Key Then
+				GetColumnValues = view.GetColumnValues(i)
+				Exit Function
+			End If
+		Next
+	End If
+	
+	ErrorStr$ = "找不到名稱為 "+Key+" 的直欄"
+	
+ERRORPRINT_:
+	Print "【Function】GetColumnValues:"+ErrorStr$
+	
+End Function
+%REM
+	Sub EditViewColumn
+	Description: 依Atype 編輯直欄
+%END REM
+Sub EditViewColumn(Atype$)
+	Dim ws As New NotesUIWorkspace
+	Dim uiview As NotesUIView
+	Dim view As NotesView
+	
+	Set uiview = ws.Currentview
+	Set view = uiview.View
+	
+	If Atype$ = "C" Then'建立
+		ColumnCount% = view.Columncount
+		InputPosition$ = InputBox("請輸入此直欄的位置(1 ~ "+CStr(ColumnCount% + 1)+")", "設定直欄位置", CStr(ColumnCount% + 1))
+		If InputPosition$ = "" Then
+			Exit Sub
+		ElseIf IsNumeric(InputPosition$) Then
+			Position& = CLng(InputPosition$)
+			
+			'判斷index是否超出範圍
+			If Position& < 1 Or Position& > ColumnCount% + 1 Then
+				MsgBox "輸入的位置: "+CStr(Position&)+" 超出範圍" ,, "錯誤"
+				Exit Sub
+			End If
+		End If
+		ColumnName$ = InputBox("請輸入此直欄的名稱", "設定直欄名稱")
+		ColumnFormula$ = InputBox("請輸入此直欄的公式", "設定直欄公式")
+		
+		Call view.Createcolumn(Position&, ColumnName$, ColumnFormula$)
+	ElseIf Atype$ = "D" Then'刪除
+		ColumnCount% = view.Columncount
+		CNorI = InputBox("請輸入要刪除的直欄名稱或位置(1 ~ "+CStr(ColumnCount%)+")", "選擇愈刪除直欄", CStr(ColumnCount%))
+		If CNorI = "" Then Exit Sub
+		
+		'判斷輸入的數值型態
+		If IsNumeric(CNorI) Then'是數字的字串(直欄位置)
+			CNorI = CLng(CNorI)
+			
+			'判斷index是否超出範圍
+			If CNorI < 1 Or CNorI > ColumnCount% Then
+				MsgBox "輸入的位置: "+CStr(CNorI)+" 超出範圍" ,, "錯誤"
+				Exit Sub
+			End If
+			
+			Call view.Removecolumn(CNorI)
+		Else'是字串(直欄名稱)
+			CNorI = CStr(CNorI)
+			
+			'判斷有無此欄位名稱
+			ForAll viewcolumn In view.Columns
+				If viewcolumn.Title = CNorI Then
+					Call view.Removecolumn(CNorI)
+					Exit Sub
+				End If
+			End ForAll
+			MsgBox "查無直欄名稱: "+CNorI+" 的直欄"
+		End If
+	ElseIf Atype$ = "E" Then
+		ColumnCount% = view.Columncount
+		CNorI = InputBox("請輸入要編輯的直欄名稱或位置(1 ~ "+CStr(ColumnCount%)+")", "選擇愈編輯直欄", CStr(ColumnCount%))
+		If CNorI = "" Then Exit Sub
+		
+		'判斷輸入的數值型態
+		If IsNumeric(CNorI) Then'是數字的字串(直欄位置)
+			CNorI = CLng(CNorI)
+			
+			'判斷index是否超出範圍
+			If CNorI < 1 Or CNorI > ColumnCount% Then
+				MsgBox "輸入的位置: "+CStr(CNorI)+" 超出範圍" ,, "錯誤"
+				Exit Sub
+			End If
+			
+			Count& = 1
+			ForAll viewcolumn In view.Columns
+				If Count& = CNorI Then
+					Call EditViewColumn_E(viewcolumn)
+					Exit Sub
+				End If
+				Count& = Count& + 1
+			End ForAll
+		Else'是字串(直欄名稱)
+			CNorI = CStr(CNorI)
+			
+			'判斷有無此欄位名稱
+			ForAll viewcolumn In view.Columns
+				If viewcolumn.Title = CNorI Then
+					Call EditViewColumn_E(viewcolumn)
+					Exit Sub
+				End If
+			End ForAll
+			MsgBox "查無直欄名稱: "+CNorI+" 的直欄"
+		End If
+	End If
+	
+End Sub
+
+%REM
+	Sub ShowViewInfo
+	Description: 顯示View的相關資訊
+%END REM
+Sub ShowViewInfo
+	Dim ws As New NotesUIWorkspace
+	Dim uiview As NotesUIView
+	Dim view As NotesView
+	
+	Set uiview = ws.Currentview
+	Set view = uiview.View
+	
+	MsgBox 	"View名稱："+view.Name+Chr(13)+Chr(10)+_
+"View別名："+view.Aliases+Chr(13)+Chr(10)+_
+"欄位數："+CStr(view.Columncount)+Chr(13)+Chr(10)+_
+"Seclect公式："+Chr(13)+Chr(10)+_
+	view.Selectionformula ,, "View資訊"
+	
+	
+End Sub
+
+%REM
+	Sub EditSelectionFormula
+	Description: 編輯View的Select公式
+%END REM
+Sub EditSelectionFormula
+	Dim ws As New NotesUIWorkspace
+	Dim uiview As NotesUIView
+	Dim view As NotesView
+	
+	Set uiview = ws.Currentview
+	Set view = uiview.View
+	
+	SelectFormula$ = InputBox("請設定此View的Select公式", view.Name, view.Selectionformula)
+	If SelectFormula$ = "" Then Exit Sub
+	
+	view.Selectionformula = SelectFormula$
+	Call view.Refresh
+	
+End Sub
+
+%REM
+	Sub OpenView
+	Description: 依照輸入的關鍵字開啟View
+%END REM
+Sub OpenView
+	Dim s As New NotesSession
+	Dim db As NotesDatabase
+	Dim View As NotesView
+	
+	SearchKey$ = InputBox("請輸入搜尋關鍵字", "搜尋View")
+	If SearchKey$ = "" Then Exit Sub
+	
+	Set db = s.Currentdatabase
+	Set Views = db.Views
+	
+	ForAll v In views
+		Set View = v
+		
+		
+	End ForAll
+	
+End Sub
+
+%REM
+	Sub EditViewColumn_E
+	Description: 編輯欄位(標題或公式)
+%END REM
+Sub EditViewColumn_E(viewcolumn)
+	
+	'選擇動作
+	Action$ = UCase(InputBox("請輸入動作(T標題, F公式)", "選擇動作"))
+	If Action$ = "T" Then'選擇標題
+		ColumnName$ = InputBox("請輸入標題名稱", "選擇標題", viewcolumn.Title)
+		viewcolumn.Title = ColumnName$
+	ElseIf Action$ = "F" Then'選擇公式
+		ColumnFormula$ = InputBox("請輸入公式", "選擇公式", viewcolumn.Formula)
+		viewcolumn.Formula = ColumnFormula$
+	Else
+		MsgBox "無法辨別動作" ,, "錯誤"
+	End If
+	
+End Sub
+
+%REM
+	Function GetViewColumn
+	Description: 依照給的值判斷其為Title或Index，並找到此直欄
+%END REM
+Function GetViewColumn(CNorI)
+	Dim view As NotesView
+	Dim vc As NotesViewColumn
+	
+	
+	
+	ColumnCount% = view.Columncount
+	If IsNumeric(CNorI) Then'是數字的字串(直欄位置)
+		'判斷index是否超出範圍
+		If CNorI < 1 Or CNorI > ColumnCount% Then
+			MsgBox "輸入的位置: "+CStr(CNorI)+" 超出範圍" ,, "錯誤"
+			Exit Function
+		End If
+		
+	Else'是字串(直欄名稱)
+		
+	End If
+	
+End Function
