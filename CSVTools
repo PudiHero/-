@@ -1,0 +1,246 @@
+%REM
+	Library CSVTools
+	Created 2024/8/29 by ARNO TU/DCT
+	Description: CSV相關工具
+%END REM
+Option Public
+
+%REM
+	Function GetDataArrayByView
+	Description: 依照View的格式構建DataArray(不建議使用多重值欄位)
+%END REM
+Function GetDataArrayByView(view As NotesView) As Variant
+	Dim doc As NotesDocument
+	Dim item As NotesItem
+	
+	DataArray = Evaluate(|""|)
+	
+	'CSV標頭(直欄)
+	ForAll viewcolumn In view.Columns
+		CNString$ = CNString$ + viewcolumn.Title + ","
+	End ForAll
+	
+	'處理逗號後寫入Array
+	CNString$ = Left(CNString$, Len(CNString$) - 1)
+	DataArray = FullTrim(ArrayAppend(DataArray, CNString$))
+	
+	'資料(Value>行>行列)
+	Set doc = view.Getfirstdocument
+	While Not doc Is Nothing
+		DataSrting$ = ""
+		
+		ForAll viewcolumn In view.Columns
+			
+			'判斷是否有公式
+			If viewcolumn.Isformula Then
+				'用公式找欄位
+				fn$ = viewcolumn.Formula
+			Else
+				'用直欄名稱找欄位
+				fn$ = viewcolumn.Title
+			End If
+			
+			Set item = doc.Getfirstitem(fn$)
+			If item Is Nothing Then
+				Print "【Function】GetDataArrayByView:找不到名稱為 "+fn$+" 的欄位"
+				Exit Function
+			End If
+			
+			'判斷是否為多重值
+			ValueString$ = ""
+			If UBound(item.Values) > 1 Then
+				ForAll value In item.Values
+					ValueString$ = ValueString$ + "　" + value '使用全形空白區隔
+				End ForAll
+			Else
+				ValueString$ = item.Values(0)
+			End If
+			DataSrting$ = DataSrting$ + ValueString$ + ","
+			
+		End ForAll
+		
+		'處理逗號後寫入Array
+		DataSrting$ = Left(DataSrting$, Len(DataSrting$) - 1)
+		DataArray = FullTrim(ArrayAppend(DataArray, DataSrting$))
+		
+		'換下份文件(CSV的換行)
+		Set doc = view.Getnextdocument(doc)
+	Wend
+	
+	GetDataArrayByView = DataArray
+		
+End Function
+
+%REM
+	Function GetEnvironmentString
+	Description: 獲取用戶的環境變數
+%END REM
+Function GetEnvironment(environName$) As String
+	On Error Resume Next
+	GetEnvironment = Environ(environName$)
+End Function
+
+%REM
+	Function GetDataArrayByDoc
+	Description: 依傳入的欄位名稱Array構建DataArray
+%END REM
+Function GetDataArrayByDoc(doc As NotesDocument, fnArray) As Variant
+	Dim item As NotesItem
+	
+	DataArray = Evaluate(|""|)
+	
+	'CSV標頭(直欄)
+	ForAll fn In fnArray
+		Title$ = Title$ + fn + ","
+		Set item = doc.Getfirstitem(fn)
+		If item Is Nothing Then '欄位檢查
+			Print "【Function】GetDataArrayByDoc:找不到名稱為 "+fn+" 的欄位"
+			Exit Function
+		End If
+		
+		'Ubound檢查，採用所有欄位最小UB
+		UB% = UBound(item.Values)
+		If minUB% = 0 Or minUB% > UB% Then minUB% = UB%
+	End ForAll
+	
+	'處理逗號後寫入Array
+	Title$ = Left(Title$, Len(Title$) - 1)
+	DataArray = FullTrim(ArrayAppend(DataArray, Title$))
+	
+	For i = 0 To minUB%
+		DataSrting$ = ""
+		
+		ForAll fn In fnArray
+			Set item = doc.Getfirstitem(fn)
+			DataSrting$ = DataSrting$ + item.Values(i) + ","
+		End ForAll
+		
+		'處理逗號後寫入Array
+		DataSrting$ = Left(DataSrting$, Len(DataSrting$) - 1)
+		DataArray = FullTrim(ArrayAppend(DataArray, DataSrting$))
+	Next
+	
+	GetDataArrayByDoc = DataArray
+	
+End Function
+%REM
+	Function FileNameValidation
+	Description: 驗證檔名是否有特殊符號並換為全形
+%END REM
+Function FileNameValidation(FileName$) As String
+	
+	FileName$ = Replace(FileName$, "/", "／")
+	FileName$ = Replace(FileName$, ":", "：")
+	FileName$ = Replace(FileName$, "*", "＊")
+	FileName$ = Replace(FileName$, "?", "？")
+	FileName$ = Replace(FileName$, |"|, "＂")
+	FileName$ = Replace(FileName$, "<", "＜")
+	FileName$ = Replace(FileName$, ">", "＞")
+	FileName$ = Replace(FileName$, "|", "｜")
+	If Not InStr(FileName$, ".csv") Then FileName$ = FileName$ + ".csv"
+	
+	FileNameValidation = FileName$
+	
+End Function
+
+%REM
+	Sub ExportCSV
+	Description: 創建或編輯CSV
+	PathPriority 為路徑優先度
+	例:"1,2"表示先抓桌面再彈出下載視窗，如有抓到桌面將不彈視窗)
+	1.抓桌面路徑
+	2.彈出下載路徑視窗
+	3.共用文件(建議最後選擇)
+%END REM
+Sub ExportCSV(FileName$, DataArray As Variant, PathPriority$)
+	
+	'驗證檔名是否有特殊符號並換為全形
+	FileName$ = FileNameValidation(FileName$)
+	
+	'獲取檔案路徑
+	FilePath$ = GetFilePath(FileName$, PathPriority$)
+	If FilePath$ = FileName$ Then Exit Sub
+	
+	'獲取一個空閒的文件號
+	FileNum% = FreeFile
+	
+	'打開文件進行輸出
+	Open FilePath$ For Output As FileNum%
+	
+	ForAll DataRow In DataArray
+		
+		'驗證資料
+		DataRow = DataValidation(DataRow, ",", ",")
+		
+		'寫入數據(行)
+		Print #fileNum%, DataRow
+		
+	End ForAll
+	
+	'關閉文件
+	Close fileNum%
+	
+	Print "CSV匯出成功，路徑:"+FilePath$
+	
+	Exit Sub
+	
+End Sub
+
+%REM
+	Function GetFilePath
+	Description: 依照優現度順序獲取檔案路徑
+	PathPriority 為路徑優先度
+	例:"1,2"表示先抓桌面再彈出下載視窗，如有抓到桌面將不彈視窗)
+	1.抓桌面路徑
+	2.彈出下載路徑視窗
+	3.共用文件(建議最後選擇)
+%END REM
+Function GetFilePath(FileName$, PathPriority$) As String
+	Dim ws As New NotesUIWorkspace
+	Dim tmparray As Variant
+	Dim patharray As Variant
+	
+	If PathPriority$ = "" Then PathPriority$ = "1,3"
+	
+	tmparray = Split(PathPriority$, ",")
+	
+	For i = 0 To UBound(tmparray)
+		If tmparray(i) = "1" Then GetFilePath = GetEnvironment("\Desktop\") & FileName$
+		If tmparray(i) = "2" Then
+			patharray = ws.SaveFileDialog(False, "選擇保存CSV文件的位置", "*.csv", FileName$, FileName$)
+			GetFilePath = patharray(0)
+		End If
+		If tmparray(i) = "3" Then GetFilePath = "C:\Users\Public\Documents\" & FileName$
+		If GetFilePath <> "" And GetFilePath <> FileName$ Then Exit Function
+	Next
+	
+	GetFilePath = FileName$
+	
+	'錯誤型態
+	ForAll number In tmparray
+		If Not IsNumeric(number) Then
+			ErrorStr$ = "輸入的路徑優先度並非數字"
+			GoTo ERROR_
+		ElseIf CInt(number) < 1 Or CInt(number) > 3 Then
+			ErrorStr$ = "輸入的路徑優先度超出範圍"
+			GoTo ERROR_
+		End If
+	End ForAll
+	
+	ErrorStr$ = "輸入的路徑優先度有誤"'如3放前面被1,2蓋掉或2放後面卻不選擇
+	
+ERROR_:
+	Print "【Function】GetFilePath:"+ErrorStr$
+End Function
+
+%REM
+	Function DataValidation
+	Description: 
+	1.驗證 DataRow 的資料型態並轉換成String
+	2.判斷 DataRow 是否有 Delimiter$ 並替換成 Replacement$ 以避免CSV格式錯誤
+%END REM
+Function DataValidation(DataRow, Delimiter$, Replacement$) As String
+	If DataType(DataRow) <> 8 Then DataRow = CStr(DataRow)
+	DataRow = Replace(DataRow, Delimiter$, Replacement$)
+	DataValidation = DataRow
+End Function
