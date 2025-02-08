@@ -1,0 +1,696 @@
+%REM
+	Library ArnoTools
+	Created 2024/8/19 by ARNO TU/DCT
+	Description: Comments for Library
+%END REM
+Option Public
+Use "DCTBPIKeyDefSrc"'HowToGetDatabase
+Use "DCT_GetBPIdbClass"'HowToGetDatabase
+Sub Initialize
+	%REM
+		(Ctrl + 左鍵點擊可快速進入查看)
+		【方法整理】
+			獲取資料庫:Call HowToGetDatabase
+			獲取視圖	:Call HowToGetView
+			獲取文件集:Call HowToGetDocumentCollection
+			獲取文件	:Call HowToGetDocument
+		【工具】
+			獲得原單號	:Call GetOriSNO
+			獲得欄位項次	:Call GetDiAmount
+			百分比轉數字	:Call ConvertPercentageToNumber
+			刪除舊檔		:Call DelOldDoc
+			修改陣列值	:Call ReplaceValueInArray
+			創造序號陣列	:Call CreateSerialArray
+			快速開啟		:Call FastOpen
+			快速開啟(追蹤)	:Call FastOpenTracking
+			設定處理程序	:Call SetProcess
+			PN快速搜尋	:Call SearchByPN
+			創建或編輯CSV	:Call ExportCSV
+			移動陣列值	:Call ShiftArrayValue (未完成)
+			設定doc欄位值	:Call SetItemValue (未完成)
+		【子民】
+			選擇排序法	:Call SeleSelectBy2Arr
+			非UI開文件	:Call OpenDoc
+	%END REM
+End Sub
+
+%REM
+	Sub HowToGetDocument
+	Description: 抓取Document的方式
+%END REM
+Sub HowToGetDocument
+	Dim ws As NotesUIWorkspace'1
+	Dim uidoc As NotesUIDocument'1
+	Dim db As NotesDatabase'2
+	Dim view As NotesView'3
+	Dim dc As NotesDocumentCollection'4
+	Dim vec As NotesViewEntryCollection'5
+	Dim entry As NotesViewEntry'5
+	Dim item As NotesItem'6
+	Dim doc As NotesDocument
+	
+	'1.NotesUIDocument
+	Set uidoc = ws.Currentdocument
+	Set doc = uidoc.Document
+	
+	'2.NotesDatabase
+	Set doc = db.Createdocument
+	Set doc = db.Getdocumentbyid(Noteid)
+	Set doc = db.Getdocumentbyunid(Noteunid)
+	Set doc = db.Getdocumentbyurl(Url)'不熟
+	
+	'3.NotesView
+	Set doc = view.Getdocumentbykey(Keyarray, Exactmatch)
+	Set doc = view.Getfirstdocument
+	Set doc = view.Getlastdocument
+	Set doc = view.Getnextdocument(doc)
+	Set doc = view.Getprevdocument(doc)
+	Set doc = view.Getnthdocument(Index)
+	Set doc = view.Getparentdocument(doc)'不熟
+	
+	'4.NotesDocumentCollection
+	Set doc = dc.Getdocument(doc)'不熟
+	Set doc = dc.Getfirstdocument
+	Set doc = dc.Getlastdocument
+	Set doc = dc.Getnextdocument(doc)
+	Set doc = dc.Getprevdocument(doc)
+	Set doc = dc.Getnthdocument(Index)
+	
+	'5.NotesViewEntry
+	Set vec = view.Allentries
+	Set entry = vec.Getfirstentry
+	Set doc = entry.Document'不熟
+	
+	'6.NotesItem
+	Set doc = item.Parent
+	
+End Sub
+
+%REM
+	Sub FastOpenTracking
+	Description: 當搜尋失敗時產生追蹤文件，方便新增DBMap
+%END REM
+Sub FastOpenTracking(Atype$, InputString As String, DBKey As String, Mapdb As NotesDatabase)
+	Dim s As New NotesSession
+	Dim db As NotesDatabase
+	Dim FOdoc As NotesDocument
+	
+	Set db = s.Currentdatabase
+	Set FOdoc = db.Createdocument
+	FOdoc.Form = "FOTracking"
+	
+	FOdoc.DateTime = FOdoc.Created
+	FOdoc.Atype = Atype$
+	FOdoc.Name = s.Commonusername
+	FOdoc.InputString = InputString
+	FOdoc.DBKey = DBKey
+	FOdoc.Server = Mapdb.Title
+	
+	Call FOdoc.Save(True, False)
+	
+End Sub
+
+%REM
+	Sub OpenDoc
+	Description: 非UI開啟文件需要事前宣告
+%END REM
+Sub OpenDoc(doc As NotesDocument)
+	'非UI開啟文件需要事前宣告
+	Dim readerItem As NotesItem
+	Dim editorItem As NotesItem
+	
+	Set readerItem = New NotesItem(doc, "readers", "[ADM]")
+	Set editorItem = New NotesItem(doc, "editors", "[ADM]")
+	Call readerItem.AppendToTextList("[讀]")
+	readerItem.IsReaders = True '設定readerItem為讀者欄位
+	editorItem.IsAuthors = True '設定editorItem為作者欄位
+	Call doc.Save(True, False)
+End Sub
+
+%REM
+	Sub DelOldDoc
+	Description: 判斷建立時間的先後，舊的del設Y
+%END REM
+Sub DelOldDoc(dc As NotesDocumentCollection)
+	Dim doc As NotesDocument
+	Dim tmpdoc As NotesDocument
+	Dim cdate1 As NotesDateTime
+	Dim cdate2 As NotesDateTime
+	
+	If dc.Count = 1 Then
+		Print "【Sub】DelOldDoc:傳入的dc只有1份文件，不需del"
+		Exit Sub
+	ElseIf dc.Count = 0 Then
+		Print "【Sub】DelOldDoc:傳入的dc沒有文件"
+		Exit Sub
+	End If
+	
+	Set doc = dc.Getfirstdocument
+	Set tmpdoc = dc.Getnextdocument(doc)
+	While Not tmpdoc Is Nothing
+		Set cdate1 = New NotesDateTime(doc.Created)
+		Set cdate2 = New NotesDateTime(tmpdoc.Created)
+		'判斷建立時間的先後，舊的del設Y
+		If cdate1.Timedifference(cdate2) > 0 Then
+			'doc較新(建立時間較晚)
+			tmpdoc.del = "Y"
+			Call tmpdoc.Save(True, False)
+			Set tmpdoc = dc.Getnextdocument(tmpdoc)
+			count% = count% + 1
+		ElseIf cdate1.Timedifference(cdate2) < 0 Then
+			'tmpdoc較新(建立時間較晚)
+			doc.del = "Y"
+			Call doc.Save(True, False)
+			Set doc = tmpdoc
+			Set tmpdoc = dc.Getnextdocument(doc)
+			count% = count% + 1
+		Else
+			'建立時間相同，先跳過
+			Set tmpdoc = dc.Getnextdocument(tmpdoc)
+		End If
+	Wend
+	Print "【Sub】DelOldDoc:執行完畢，共處理 "+CStr(count%)+" 筆文件。"
+End Sub
+
+%REM
+	Function ReplaceArrayValueNew
+	Description: Comments for Function
+%END REM
+Function ReplaceArrayValueNew(array As Variant, index As Integer, RPvalue As Variant)
+	
+End Function
+
+%REM
+	Sub HowToGetView
+	Description: 抓取View的方法
+%END REM
+Sub HowToGetView
+	Dim ws As NotesUIWorkspace'1
+	Dim uiview As NotesUIView'1
+	Dim db As NotesDatabase'2
+	Dim view As NotesView
+	Dim doc As NotesDocument'3
+	Dim entry As NotesViewEntry'4
+	Dim nav As NotesViewNavigator'5
+	
+	'1.NotesUIView
+	Set uiview = ws.Currentview
+	Set view = uiview.View
+	
+	'2.NotesDatabase
+	Set view = db.Getview(Viewname)
+	
+	'3.NotesDocument
+	Set view = doc.Parentview
+	
+	'4.NotesViewEntry
+	Set view = entry.Parent'不熟
+	
+	'5.NotesViewNavigator
+	Set view = nav.Parentview'不熟
+	
+End Sub
+
+%REM
+	Sub SearchByPN
+	Description: 依照PN去搜尋盤盈虧表、產品資料或進出明細
+%END REM
+Sub SearchByPN
+	Dim s As New NotesSession
+	Dim ws As New NotesUIWorkspace
+	Dim Mapdb As NotesDatabase
+	Dim view As NotesView
+	Dim pdoc As NotesDocument
+	Dim doc As NotesDocument
+	
+	Dim Tardb As NotesDatabase
+	Dim Tardc As NotesDocumentCollection
+	Dim Tardoc As NotesDocument
+	
+	Set db = s.Currentdatabase
+	Set pdoc = db.Getprofiledocument("SetupProfile")
+	
+	ForAll des In pdoc.DBdes_SBPN
+		Initial$ = pdoc.Initial(ArrayGetIndex(pdoc.DBdes_SBPN, des))
+		Prompt$ = Prompt$ + Initial$ + des + " "
+	End ForAll
+	
+	InputString$ = InputBox("請輸入PN,表單類型"+Chr(13)+Chr(10)+_
+	"("+Prompt$+")", "PN快速搜尋")
+	If InputString$ = "" Then
+		Exit Sub
+	ElseIf InStr(InputString$, "`") Then
+		'線上目標會在最後加上` 例:1E7D7AA-5,r`
+		InputString$ = StrLeft(InputString$, "`")
+		Set Mapdb = s.Getdatabase("AP_NOTES/DCT", "DCT\DCT_NSD.NSF")
+	Else
+		Set Mapdb = s.Getdatabase("RD/DCT", "Testing\DCT_GS.nsf")
+	End If
+	
+	tmparray = Split(InputString$, ",")
+	
+	PN$ = tmparray(0)
+	If PN$ = "" Then
+		MsgBox "PN不可為空"
+		Exit Sub
+	End If
+	
+	Ftype$ = UCase(tmparray(1))
+	If Ftype$ = "" Then
+		MsgBox "表單類型不可為空"
+		Exit Sub
+	Else
+		index = ArrayGetIndex(pdoc.Initial, Ftype$)
+		If Not IsNull(index) Then
+			DBKey$ = pdoc.DBKey_SBPN(index)
+			Form$ = pdoc.Form_SBPN(index)
+		End If
+	End If
+	
+	'用DBKey抓DBMap
+	Set view = Mapdb.Getview("DBMAP")
+	Set doc = view.Getdocumentbykey(DBKey$, True)
+	If doc Is Nothing Then
+		MsgBox "查無 " + DBKey$ + " 資料庫"
+		Exit Sub
+	End If
+	
+	Set Tardb = s.Getdatabase(doc.svrn(0), doc.dbn(0))
+	SearchFomula$ = "PN = '"+PN$+"' & Form = '"+Form$+"'"
+	Set Tardc = Tardb.Search(SearchFomula$, Nothing, 0)
+	If Tardc.Count = 0 Then
+		MsgBox "查無料號 "+PN$+" 的 "+pdoc.DBdes_SBPN(index)
+	Else
+		Set Tardoc = Tardc.Getfirstdocument
+		Call ws.Editdocument(False, Tardoc, True)
+	End If
+	
+End Sub
+
+
+%REM
+	Function GetOriSNO
+	Description: 抓原單號(若有r則刪除r及以後的字)
+%END REM
+Function GetOriSNO(doc As NotesDocument, fn$) As String
+	Dim item As NotesItem
+	
+	Set item = doc.Getfirstitem(fn$)
+	If item Is Nothing Then
+		Print "【Function】GetOriSNO:找不到名稱為 "+fn$+" 的欄位"
+		GetOriSNO = ""
+		Exit Function
+	End If
+	
+	If InStr(item.Values(0),"r") Then
+		GetOriSNO = StrLeft(item.Values(0),"r")
+	Else
+		GetOriSNO = item.Values(0)
+	End If
+End Function
+
+%REM
+	Sub SetProcess
+	Description: 根據按鈕設定的ProcessType存入FOdoc內
+%END REM
+Sub SetProcess(Ptype$)
+	Dim s As New NotesSession
+	Dim ws As New NotesUIWorkspace
+	Dim db As NotesDatabase
+	Dim uiview As NotesUIView
+	Dim view As NotesView
+	Dim dc As NotesDocumentCollection
+	Dim doc As NotesDocument
+	
+	Set db = s.Currentdatabase
+	Set dc = db.Unprocesseddocuments
+	Set doc = dc.Getfirstdocument
+	While Not doc Is Nothing
+		doc.Process = Ptype$
+		Call doc.Save(True, False)
+		Set doc = dc.Getnextdocument(doc)
+	Wend
+	
+	Set uiview = ws.Currentview
+	Set view = uiview.View
+	Call view.Refresh()
+End Sub
+
+
+%REM
+	Function ReplaceArrayValue
+	Description: 修改陣列特定index的值
+%END REM
+Function ReplaceArrayValue(array, index%, RPValue) As Variant
+	
+	If RPValue = "" Then
+		ErrorStr$ = "輸入的值不可為空字串"
+		GoTo ERRORPRINT_
+	ElseIf RPValue = array(index%) Then
+		ErrorStr$ = "輸入的值等於該陣列index的值，無須執行此Function"
+		GoTo ERRORPRINT_
+	End If
+	
+	If index% > UBound(array) Then
+		ErrorStr$ = "輸入的index超過陣列上限"
+		GoTo ERRORPRINT_
+	ElseIf index% < 0 Then
+		ErrorStr$ = "輸入的index不可小於0"
+		GoTo ERRORPRINT_
+	End If
+	
+	'用array的第一個值判斷資料型態
+	ArrayDataType% = DataType(array(0))
+	If ArrayDataType% = 2 Then 'Integer
+		RPValue = CInt(RPValue)
+	ElseIf ArrayDataType% = 5 Then 'Double
+		RPValue = CDbl(RPValue)
+	ElseIf ArrayDataType% = 7 Then 'DateTime
+		RPValue = CDat(RPValue)
+	ElseIf ArrayDataType% = 8 Then 'String
+		RPValue = CStr(RPValue)
+	Else
+		ErrorStr$ = "不處理特殊的資料型態"
+		GoTo ERRORPRINT_
+	End If
+	
+	tmparray = Evaluate(|""|)
+	ForAll Value In array
+		If Index% = tmpIndex Then
+			tmparray = FullTrim(ArrayAppend(tmparray, RPValue))
+		Else
+			tmparray = FullTrim(ArrayAppend(tmparray, Value))
+		End If
+		tmpIndex = tmpIndex + 1
+	End ForAll
+	
+	ReplaceArrayValue = tmparray
+	
+	Exit Function
+	
+ERRORPRINT_:
+	
+	Print "【Function】ReplaceArrayValue:"+ErrorStr$
+	ReplaceArrayValue = array
+	
+End Function
+
+%REM
+	Agent 快速開啟
+	Created 2024/8/23 by ARNO TU/DCT
+	Description: 輸入DBKey或單號後，開啟資料庫或文件。(若要開線上則在最後加`)
+%END REM
+Sub FastOpen
+	Dim s As New NotesSession
+	Dim ws As New NotesUIWorkspace
+	Dim db As NotesDatabase
+	Dim view As NotesView
+	Dim doc As NotesDocument
+	Dim pdoc As NotesDocument
+	
+	Dim Mapdb As NotesDatabase
+	
+	Dim Tardb As NotesDatabase
+	Dim Tardc As NotesDocumentCollection
+	Dim Tardoc As NotesDocument
+	
+	'解析輸入的字串
+	InputString$ = InputBox("請輸入資料庫名稱或單號", "快速開啟")
+	If InputString$ = "" Then
+		Exit Sub
+	ElseIf InStr(InputString$, "`") Then
+		'線上目標會在最後加上` 例:SO` 或 SO-11308-0090r1`
+		InputString$ = StrLeft(InputString$, "`")
+		Set Mapdb = s.Getdatabase("AP_NOTES/DCT", "DCT\DCT_NSD.NSF")
+	Else
+		Set Mapdb = s.Getdatabase("RD/DCT", "Testing\DCT_GS.nsf")
+	End If
+	
+	'有-表示輸入單號，無則輸入DBKey
+	If InStr(InputString$, "-") Then
+		DBKey$ = StrLeft(InputString$, "-")
+		
+		Set db = s.Currentdatabase
+		Set pdoc = db.Getprofiledocument("SetupProfile")
+		index = ArrayGetIndex(pdoc.SNOIntro, DBKey$)
+		If Not IsNull(index) Then
+			DBKey$ = pdoc.DBKey_FO(index)
+		End If
+	Else
+		DBKey$ = UCase(InputString$)
+	End If
+	
+	'用DBKey抓DBMap
+	Set view = Mapdb.Getview("DBMAP")
+	Set doc = view.Getdocumentbykey(DBKey$, True)
+	If doc Is Nothing Then
+		MsgBox "查無 " + DBKey$ + " 資料庫"
+		Call FastOpenTracking("DB", InputString$, DBKey$, Mapdb)
+		Exit Sub
+	End If
+	
+	'輸入單號則開單，輸入DBKey則開DB
+	If InStr(InputString$, "-") Then
+		Set Tardb = s.Getdatabase(doc.svrn(0), doc.dbn(0))
+		Set Tardc = Tardb.Search("SerialNo = '"+InputString$+"'", Nothing, 0)
+		If Tardc.Count = 0 Then
+			MsgBox "查無單號 "+InputString$+" 的文件"
+			Call FastOpenTracking("DOC", InputString$, DBKey$, Mapdb)
+		Else
+			Set Tardoc = Tardc.Getfirstdocument
+			Call ws.Editdocument(False, Tardoc, True)
+		End If
+	Else
+		Call ws.Opendatabase(doc.svrn(0), doc.dbn(0))
+	End If
+	
+End Sub
+
+%REM
+	Function ConvertPercentageToNumber
+	Description: 轉百分比為數字，先去除%再除以100
+%END REM
+Function ConvertPercentageToNumber(inputStr$) As Double
+	
+	'去除百分號
+	cleanStr$ = Replace(inputStr$, "%", "")
+	
+	'將字串轉換為數字並除以100
+	ConvertPercentageToNumber = CDbl(cleanStr$) / 100
+	
+End Function
+
+%REM
+	Function ShiftArrayValue
+	Description: 使陣列的值向左或右移動n個位置
+%END REM
+Function ShiftArrayValue(array As Variant, direction As String, n As Integer) As Variant
+	
+	
+	If n < 0 Then
+		
+		
+	End If
+	
+End Function
+%REM
+	Sub HowToGetDatabase
+	Description: 抓取Database的方式
+%END REM
+Sub HowToGetDatabase
+	Dim s As New NotesSession'1,3
+	Dim doc As NotesDocument'2
+	Dim ws As NotesUIWorkspace'4
+	Dim uidb As NotesUIDatabase'4
+	Dim view As NotesView'5
+	Dim ACL As NotesACL'6
+	Dim dc As NotesDocumentCollection'7
+	Dim db As NotesDatabase
+	Dim COGSdb As NotesDatabase
+	Dim STKdb As NotesDatabase
+	
+	'1.NotesSession
+	Set db = s.Currentdatabase
+	
+	'2.NotesDocument
+	Set db = doc.Parentdatabase
+	
+	'3.DCT_BPIdbClass
+	Dim BPIpara As New DCT_BPIdbClass("COGSOK")
+	Dim STKBPIClass As New DCT_BPIdbClass(STKdbBPIKey)
+	Set COGSdb = s.GetDatabase(BPIpara.svrName,  BPIpara.dbName)
+	Set STKdb = s.GetDatabase(STKBPIClass.svrName , STKBPIClass.DBName)
+	
+	'4.NotesUIDatabase
+	Set uidb = ws.Currentdatabase
+	Set db = uidb.Database
+	
+	'5.NotesView
+	Set db = view.Parent
+	
+	'6.NotesACL
+	Set db = ACL.Parent'不熟
+	
+	'7.NotesDocumentCollection
+	Set db = dc.Parent
+	
+End Sub
+
+%REM
+	Function GetDiAmount
+	Description: 計數項次數
+%END REM
+Function GetDiAmount(doc As NotesDocument, fn$) As Integer
+	Dim item As NotesItem
+	
+	Set item = doc.Getfirstitem(fn$)
+	If item Is Nothing Then
+		Print "【Function】GetDiAmount:找不到名稱為 "+fn$+" 的欄位"
+		GetDiAmount = 0
+		Exit Function
+	End If
+	
+	If IsNull(item.Values) Then'防止無任何項次
+		GetDiAmount = 0
+	ElseIf IsArray(item.Values) Then'防止只有一個項次而不為陣列
+		GetDiAmount = UBound(item.Values) + 1
+	Else
+		GetDiAmount = 1
+	End If
+End Function
+
+%REM
+	Function CreateSerialArray
+	Description: 創造出Amount個的陣列，前後可加字串
+%END REM
+Function CreateSerialArray(Amount%, Intro$, Outtro$) As Variant
+	
+	If Amount% < 1 Then
+		Print "【Function】CreateSerialArray:輸入的數量不可小於1"
+		Exit Function
+	End If
+	
+	tmparray = Evaluate(|""|)
+	For i = 1 To Amount%
+		tmparray = FullTrim(ArrayAppend(tmparray, Intro$ + CStr(i) + Outtro$))
+	Next
+	
+	CreateSerialArray = tmparray
+	
+End Function
+
+%REM
+	Sub HowToGetDocumentCollection
+	Description: 抓取DocumentCollection的方法
+%END REM
+Sub HowToGetDocumentCollection
+	Dim db As NotesDatabase'1
+	Dim uidb As NotesUIDatabase'2
+	Dim view As NotesView'3
+	Dim uiview As NotesUIView'4
+	Dim doc As NotesDocument'5
+	Dim dc As NotesDocumentCollection
+	
+	'1NotesDatabase
+	Set dc = db.Search(Formula, Datetime, Maxdocs)
+	Set dc = db.Createdocumentcollection
+	Set dc = db.Alldocuments
+	Set dc = db.Unprocesseddocuments
+	
+	'2.NotesUIDatabase
+	Set dc = uidb.Documents
+	
+	'3.NotesView
+	Set dc = view.Getalldocumentsbykey(Keyarray, Exactmatch)
+	
+	'4.NotesUIView
+	Set dc = uiview.Documents
+	
+	'5.NotesDocument
+	Set dc = doc.Responses'不熟
+	
+End Sub
+
+%REM
+	Sub SeleSelectBy2Arr
+	Description: 選擇排序法
+%END REM
+Sub SeleSelectBy2Arr(timeArray As Variant, AllDocUnid As Variant) 
+	Print CStr(Now)+"選擇排序法"
+	Dim i As Variant
+	Dim minIdx As Variant
+	
+	For i = 0 To UBound(timeArray)
+		minIdx = i '初始化
+		Dim j As Variant
+		For j = i + 1 To UBound(timeArray)
+			If timeArray(i) > timeArray(j) Then
+				Dim tmp As Variant
+				Dim tmp2 As Variant
+				minIdx = j
+				
+				tmp = timeArray(minIdx)
+				timeArray(minIdx) = timeArray(i)
+				timeArray(i) = tmp
+				
+				tmp2 = AllDocUnid(minIdx)
+				AllDocUnid(minIdx) = AllDocUnid(i)
+				AllDocUnid(i) = tmp2
+			End If
+		Next
+	Next
+	
+End Sub
+
+%REM
+	Sub SetItemValue
+	Description: 在View或doc內設Value
+%END REM
+Sub SetItemValue
+	Dim s As New NotesSession
+	Dim ws As New NotesUIWorkspace
+	Dim db As NotesDatabase
+	Dim uidoc As NotesUIDocument
+	Dim dc As NotesDocumentCollection
+	Dim doc As NotesDocument
+	
+	Dim item As NotesItem
+	
+	Value = InputBox("請輸入要設定的值:", "欄位值")
+	
+	DT$ = UCase(InputBox("請輸入數值型態(Str, Int, Dbl, Dat):", "數值型態", "Str"))
+	If DT$ = "" Then Exit Sub
+	
+	fn$ = InputBox("請輸入欄位名稱:", "欄位名稱")
+	If fn$ = "" Then Exit Sub
+	
+	If Value = "" Then
+		Value = CStr(Value)
+	ElseIf DT$ = "STR" Or DT$ = "STRING" Then
+		Value = CStr(Value)
+	ElseIf DT$ = "INT" Or DT$ = "INTEGER" Then
+		Value = CInt(Value)
+	ElseIf DT$ = "DBL" Or DT$ = "DOUBLE" Then
+		Value = CDbl(Value)
+	ElseIf DT$ = "DAT" Or DT$ = "DATE" Then
+		Value = CDat(Value)
+	End If
+	
+	'判斷此Sub的環境
+	Set uidoc = ws.Currentdocument
+	If uidoc Is Nothing Then
+		Set db = s.Currentdatabase
+		Set dc = db.Unprocesseddocuments
+		Set doc = dc.Getfirstdocument
+	Else
+		Set doc = uidoc.Document
+	End If
+	
+	Set item = doc.Getfirstitem(fn$)
+	If item Is Nothing Then
+		MsgBox "找不到名稱為 "+fn$+" 的欄位"
+	Else
+		Call doc.Replaceitemvalue(fn$, Value)
+	End If
+	
+End Sub
