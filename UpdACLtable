@@ -1,0 +1,263 @@
+%REM
+	Agent 更新系統權限表
+	Created 2024/9/30 by ARNO TU/DCT
+	Description: 將系統權限資料更新至dbmap文件
+%END REM
+Option Public
+
+Sub Initialize
+	Dim s As New NotesSession
+	Dim ws As New NotesUIWorkspace
+	Dim db As NotesDatabase
+	Dim uidoc As NotesUIDocument
+	Dim dc As NotesDocumentCollection
+	Dim doc As NotesDocument 'dbmap
+	Dim pdoc As NotesDocument 'add by Arno 2024/11/11
+	
+	Dim Tardb As NotesDatabase
+	Dim ACL As NotesACL
+	Dim ACLentry As NotesACLEntry
+	
+	ans% = MsgBox ("是否要繼續?", 4 + 32, "確認")
+	If ans% = 7 Then Exit Sub
+	
+	Print "開始更新系統權限表"
+	
+	'判斷執行環境
+	Set uidoc = ws.Currentdocument
+	If uidoc Is Nothing Then'view
+		Set db = s.Currentdatabase 'nsd
+		Set dc = db.Unprocesseddocuments
+		Set doc = dc.Getfirstdocument
+	Else'doc
+		uidoc.Editmode = True
+		Set doc = uidoc.Document
+		Set db = s.Currentdatabase 'nsd
+		Set dc = db.Createdocumentcollection
+		Call dc.Adddocument(doc)
+		Set doc = dc.Getfirstdocument
+	End If
+	
+	Set pdoc = db.Getprofiledocument("SetupProfile") 'add by Arno 2024/11/11
+	
+	While Not doc Is Nothing
+		
+		Set Tardb = s.Getdatabase(doc.svrn(0), doc.dbn(0))
+		
+		Print Tardb.Title
+		
+		Set ACL = Tardb.Acl
+		
+		'初始化array
+		GroupArray = Evaluate(|""|)
+		NameArray = Evaluate(|""|)
+		UserTypeArray = Evaluate(|""|)
+		LevelArray = Evaluate(|""|)
+		'RolesArray = Evaluate(|""|)
+		TipArray = Evaluate(|""|) 'add by Arno 2024/11/11 註解，顯示簡化前的原資料
+		count% = 1
+		
+		Set ACLentry = ACL.Getfirstentry
+		While Not ACLentry Is Nothing
+			'跳過伺服器
+			If ACLentry.Name = "LocalDomainServers" Or ACLentry.Name = "CN=RD/O=DCT" Then GoTo SKIP_
+			
+			'NameArray_Group = Evaluate(|""|)
+			NameRow$ = ""
+			
+			'判斷並拆解群組
+			NameRow$ = GetNameRow(ACLentry.Name)
+			'NameArray_Group = GetNamesByGroup(ACLentry.Name)
+			
+			GN = Split(NameRow$, "】")
+			
+			'重複人名Unique
+			NA = ArrayUnique(Split(GN(1), ","))
+			NA = Join(NA, ",")
+			
+			GroupArray = FullTrim(ArrayAppend(GroupArray, Str(count%)+"."+GN(0)))
+			'NameArray = FullTrim(ArrayAppend(NameArray, Str(count%)+"."+NA)) mark by Arno 2024/11/08 人名新增特別處理
+			UserTypeArray = FullTrim(ArrayAppend(UserTypeArray, Str(count%)+"."+GetUserTypeString(ACLentry.Usertype)))
+			LevelArray = FullTrim(ArrayAppend(LevelArray, Str(count%)+"."+GetLevelString(ACLentry.Level)))
+			
+			'針對profile定義的群組簡化顯示 add by Arno 2024/11/08
+			If Not IsNull(ArrayGetIndex(pdoc.GroupName, ACLentry.Name)) Then
+				NameArray = FullTrim(ArrayAppend(NameArray, Str(count%)+"."+pdoc.GroupName_Replacement(ArrayGetIndex(pdoc.GroupName, ACLentry.Name))))
+				'註解append原資料
+				TipArray = FullTrim(ArrayAppend(TipArray, Str(count%)+"."+NA))
+			Else
+				NameArray = FullTrim(ArrayAppend(NameArray, Str(count%)+"."+NA))
+			End If
+			
+			%REM mark by Arno 2024/11/11 改用profile定義
+			If ACLentry.Name = "SD" Then
+				NameArray = FullTrim(ArrayAppend(NameArray, Str(count%)+"."+"業務單位所有人員"))
+				'註解append原資料
+				TipArray = FullTrim(ArrayAppend(TipArray, Str(count%)+"."+NA))
+			ElseIf ACLentry.Name = "ES" Then
+				NameArray = FullTrim(ArrayAppend(NameArray, Str(count%)+"."+"技術單位所有人員"))
+				'註解append原資料
+				TipArray = FullTrim(ArrayAppend(TipArray, Str(count%)+"."+NA))
+			Else '正常情形
+				NameArray = FullTrim(ArrayAppend(NameArray, Str(count%)+"."+NA))
+			End If
+			%ENDREM
+			
+	%REM
+		ForAll PersonName In NameArray_Group
+			NameArray = FullTrim(ArrayAppend(NameArray, PersonName))
+			UserTypeArray = FullTrim(ArrayAppend(UserTypeArray, GetUserTypeString(ACLentry.Usertype)))
+			LevelArray = FullTrim(ArrayAppend(LevelArray, GetLevelString(ACLentry.Level)))
+			
+			不需要Roles
+			RoleString$ = "" '初始化字串
+			ForAll role In ACLentry.Roles
+				RoleString$ = RoleString$ + role
+			End ForAll
+			If RoleString$ = "" Then RoleString$ = "[無]" '防止空值影響顯示
+			RolesArray = FullTrim(ArrayAppend(RolesArray, RoleString$))
+			
+			If Len(RoleString$) > 170 Then '過長的角色會換行，要處理前面的顯示(需調整)
+				NameArray = FullTrim(ArrayAppend(NameArray, "~"))
+				UserTypeArray = FullTrim(ArrayAppend(UserTypeArray, "~"))
+				LevelArray = FullTrim(ArrayAppend(LevelArray, "~"))
+			End If
+			
+		End ForAll
+	%ENDREM
+			count% = count% + 1
+SKIP_:
+			Set ACLentry = ACL.Getnextentry(ACLentry)
+		Wend
+		
+		doc.UpdateTime = Now
+		doc.Group = GroupArray
+		doc.Name = NameArray
+		doc.UserType = UserTypeArray
+		doc.Level = LevelArray
+		doc.TipName = TipArray
+		
+		Call doc.Save(True, False)
+		
+		Set doc = dc.Getnextdocument(doc)
+	Wend
+	
+	Print "已更新系統權限表"
+	
+End Sub
+
+%REM
+	Function GetLevelString
+	Description: 獲取存取權，將數字翻譯成文字
+%END REM
+Function GetLevelString(Level%) As String
+	
+	Select Case Level%
+		Case 0:
+			GetLevelString = "沒有權限"
+		Case 1:
+			GetLevelString = "儲存者"
+		Case 2:
+			GetLevelString = "讀者"
+		Case 3:
+			GetLevelString = "作者"
+		Case 4:
+			GetLevelString = "編輯者"
+		Case 5:
+			GetLevelString = "設計者"
+		Case 6:
+			GetLevelString = "管理員"
+	End Select
+	
+End Function
+
+%REM
+	Function GetNameRow
+	Description: 從群組文件中抓取成員名字
+%END REM
+Function GetNameRow(GroupName$) As String
+	Dim s As New NotesSession
+	
+	'通訊錄
+	Dim Groupdb As NotesDatabase
+	Dim Groupview As NotesView
+	Dim Groupdoc As NotesDocument
+	Dim tmpdoc As NotesDocument
+	
+	If GroupName$ = "訊達所有員工" Then
+		GetNameRow = GroupName$+"】訊達所有人員"
+		Exit Function
+	End If
+	
+	Set Groupdb = s.Getdatabase("DCT_NOTES/DCT", "names.nsf")
+	Set Groupview = Groupdb.Getview("Groups")
+	Set Groupdoc = Groupview.Getdocumentbykey(GroupName$, True)
+	
+	If Groupdoc Is Nothing Then'找不到代表這並非群組
+		If InStr(GroupName$, "/") Then GroupName$ = StrRight(StrLeft(GroupName$, "/"), "=")
+		NameRow$ = "-】"+GroupName$+","
+	Else'找到代表這是群組
+		NameRow$ = Groupdoc.ListName(0)+"】"+MemberExpend_Str(Groupview, Groupdoc, 0)
+	End If
+	
+	'移除最後面的逗號
+	NameRow$ = Left(NameRow$, Len(NameRow$) - 1)
+	GetNameRow = NameRow$
+	
+End Function
+
+
+%REM
+	Function GetUserTypeString
+	Description: 獲取類型，將數字翻譯成文字
+%END REM
+Function GetUserTypeString(UserType%) As String
+	
+	Select Case UserType%
+		Case 0:
+			GetUserTypeString = "未指定"
+		Case 1:
+			GetUserTypeString = "人員"
+		Case 2:
+			GetUserTypeString = "伺服器"
+		Case 3:
+			GetUserTypeString = "混合式群組"
+		Case 4:
+			GetUserTypeString = "個人群組"
+		Case 5:
+			GetUserTypeString = "伺服器群組"
+	End Select
+	
+End Function
+%REM
+	Function MemberExpend_Str
+	Description: 無限拆解群組成員
+%END REM
+Function MemberExpend_Str(Groupview As NotesView, Groupdoc As NotesDocument, Count%) As String
+	Dim EXdoc As NotesDocument
+	
+	'深度檢測機制，防止無限遞迴
+	If Count% > 10 Then
+		ErrorStr$ = "偵測到異常遞迴深度，請檢查通訊錄的"+StrRight(Groupdoc.DisplayName(0),":")+"群組"
+		GoTo ERRORPRINT_
+	End If
+	
+	ForAll member In Groupdoc.Members
+		Set EXdoc = Groupview.Getdocumentbykey(member, True)
+		If InStr(member, "/") Then member = StrRight(StrLeft(member, "/"), "=")
+		If EXdoc Is Nothing Then'找不到則此member非群組
+			NameRow$ = NameRow$+member+","
+		Else'找到代表還是群組
+			Count% = Count% + 1
+			NameRow$ = NameRow$+ MemberExpend_Str(Groupview, EXdoc, Count%)
+		End If
+	End ForAll
+	
+	'拆到再也找不到以member作為key的Group文件
+	MemberExpend_Str = NameRow$
+	Exit Function
+	
+ERRORPRINT_:
+	Print "【Function】MemberExpend_Str:"+ErrorStr$
+	
+End Function
