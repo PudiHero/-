@@ -1,0 +1,181 @@
+%REM
+	Library DocumentTools
+	Created 2024/9/12 by ARNO TU/DCT
+	Description: Document相關工具
+%END REM
+Option Public
+
+%REM
+	Sub GotoField
+	Description: 查詢並移動至欄位
+	條件
+	1.要開編輯模式
+	2.欄位可編輯
+	3.欄位不可藏於小節 (已可以)
+%END REM
+Sub GotoField
+	Dim s As New NotesSession
+	Dim ws As New NotesUIWorkspace
+	Dim db As NotesDatabase
+	Dim dc As NotesDocumentCollection
+	Dim uidoc As NotesUIDocument
+	Dim doc As NotesDocument
+	
+	fn$ = InputBox("請輸入欄位名稱", "選擇欄位名稱")
+	If fn$ = "" Then Exit Sub
+	
+	Set uidoc = ws.Currentdocument
+	If uidoc Is Nothing Then
+		Set db = s.Currentdatabase
+		Set dc = db.Unprocesseddocuments
+		Set doc = dc.Getfirstdocument
+		
+		If doc.Hasitem(fn$) Then
+			Call ws.Editdocument(True, doc)
+			Set uidoc = ws.Currentdocument
+			Call uidoc.Expandallsections
+			Call uidoc.Gotofield(fn$)
+		Else
+			MsgBox "查無名稱為 "+fn$+" 的欄位" ,, "錯誤"
+		End If
+	Else
+		Set doc = uidoc.Document
+		If doc.Hasitem(fn$) Then
+			uidoc.Editmode = True
+			Call uidoc.Expandallsections
+			Call uidoc.Gotofield(fn$)
+		Else
+			MsgBox "查無名稱為 "+fn$+" 的欄位" ,, "錯誤"
+		End If
+	End If
+	
+End Sub
+
+%REM
+	Sub ChangeItemValue
+	Description: 給予欄位名稱列表選擇並設定值
+%END REM
+Sub ChangeItemValue
+	Dim ws As New NotesUIWorkspace
+	Dim uidoc As NotesUIDocument
+	Dim doc As NotesDocument
+	Dim item As NotesItem
+	
+	Set uidoc = ws.Currentdocument
+	Set doc = uidoc.Document
+	
+	fnArray = Evaluate(|""|)
+	ForAll i In doc.Items
+		Set item = i
+		fnArray = FullTrim(ArrayAppend(fnArray, item.Name))		
+	End ForAll
+	fnArray = Evaluate(|@Sort(|+fnArray+|;[ASCENDING])|)
+	
+	SelectedField = ws.Prompt (PROMPT_OKCANCELLIST, "欄位名稱列表", "請選擇欄位", fnArray(0), fnArray)
+	If SelectedField = "" Then Exit Sub
+	
+	Set item = doc.Getfirstitem(SelectedField)
+	Value = InputBox("請輸入要修改的值", "修改值", item.Values(0))
+	If Value = "" Then Exit Sub
+	
+	Call doc.Replaceitemvalue(item.Name, Value)
+	
+End Sub
+
+%REM
+	Function GetDocumentByKey
+	Description: 可用任意直欄當Key搜尋文件
+%END REM
+Function GetDocumentByKey(SearchKey, view As NotesView, CIndex) As NotesDocument
+	Dim vc As NotesViewColumn
+	Dim doc As NotesDocument
+	
+	'Index檢測
+	If IsArray(CIndex) Then
+		'多重index
+		ForAll index In Cindex
+			If index > view.Columncount-1 Or index < 0 Then
+				ErrorStr$ = "傳入的index有誤，超出view欄位數量"
+				GoTo ERRORPRINT_
+			End If
+		End ForAll
+	Else
+		'單一index
+		If CIndex > view.Columncount-1 Or CIndex < 0 Then
+			ErrorStr$ = "傳入的index有誤，超出view欄位數量"
+			GoTo ERRORPRINT_
+		End If
+	End If
+	
+	'View直欄分類檢測
+	ColumnArray = view.Columns
+	ForAll column In ColumnArray
+		Set vc = column
+		
+		If vc.Iscategory Then
+			'要使用entry
+			UseEntry = True
+			Exit ForAll
+		End If
+		
+		UseEntry = False
+	End ForAll
+	
+	'檢測SearchKey是否為陣列
+	If IsArray(SearchKey) Then
+		'多重值需多個值欄(未完成)
+		
+		'確認SearchKey的數量是否等於CIndex
+		If UBound(SearchKey) <> UBound(CIndex) Then
+			ErrorStr$ = "SearchKey與CIndex的數量不同"
+			GoTo ERRORPRINT_
+		End If
+		
+		'SearchKeyArray = Evaluate(|""|)
+		
+		'收集array內的資料
+		For i = 0 To UBound(SearchKey)
+			ColumnValues = view.Getcolumnvalues(CIndex(i))
+			ForAll value In ColumnValues
+				docIndex& = ArrayGetIndex(ColumnValues, SearchKey(i))
+				
+				If IsNull(docIndex&) Then
+					ErrorStr$ = "查無文件，SearchKey："+SearchKey(i)
+					GoTo ERRORPRINT_
+				Else
+					docIndexStr$ = docIndexStr$ + CStr(docIndex&) + "～"
+					'tmparray_docIndex = ArrayAppend(tmparray_docIndex, docIndex&)
+					
+				End If
+			End ForAll
+			
+			docIndexStr$ = docIndexStr$ + "@"
+		Next
+		
+		tmparray = Split(docIndexStr$, "～@") '分成i個
+		For i = 0 To UBound(tmparray)
+			tmparray2 = Split(tmparray(i))
+		Next
+		'製作完i個array後檢查是否有重複i次的index
+		
+		
+	Else
+		'單一值只需一個直欄
+		ColumnValues = view.Getcolumnvalues(CIndex)
+		docIndex& = ArrayGetIndex(ColumnValues, SearchKey)
+		
+		If IsNull(docIndex&) Then
+			ErrorStr$ = "查無文件，SearchKey："+SearchKey
+			GoTo ERRORPRINT_
+		Else
+			Set doc = view.Getnthdocument(docIndex&+1)
+		End If
+	End If
+	
+	Set GetDocumentByKey = doc
+	Exit Function
+	
+ERRORPRINT_:
+	Print "【Function】GetDocumentByKey:"+ErrorStr$
+	
+End Function
