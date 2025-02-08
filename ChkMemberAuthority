@@ -1,0 +1,47 @@
+%REM
+	Agent 查詢人員權限
+	Created 2024/10/4 by ARNO TU/DCT
+	Description: Comments for Agent
+%END REM
+Option Public
+Use "ArrayTools"
+Sub Initialize
+	Dim s As New NotesSession
+	Dim ws As New NotesUIWorkspace
+	Dim uidoc As NotesUIDocument
+	Dim doc As NotesDocument
+	
+	Set uidoc = ws.Currentdocument
+	Set doc = uidoc.Document
+	
+	MemberArray = Evaluate(|""|)
+	
+	If doc.Name(0) = "" Then
+		MsgBox "尚未更新系統權限表，請先更新"
+	Else
+		ForAll row In doc.Name
+			row = StrRight(row, ".") '先去1.
+			tmparray = Split(row, ",") '依逗號分割行
+			
+			ForAll member In tmparray
+				MemberArray = FullTrim(ArrayAppend(MemberArray, member))
+			End ForAll
+		End ForAll
+		
+		MemberArray = ArrayUnique(MemberArray) '清除重複的人員
+		MemberArray = SortArray(MemberArray)
+		
+		MemberName$ = ws.Prompt (PROMPT_OKCANCELLIST, "選擇", "請選擇群組", MemberArray(0), MemberArray)
+		If MemberName$ = "" Then Exit Sub
+		
+		ForAll row In doc.Name
+			If InStr(row, MemberName$) Then
+				index% = CInt(StrLeft(row, "."))
+				Level$ = Level$ + doc.Level(index%-1) + " "
+			End If
+		End ForAll
+		
+		MsgBox MemberName$+" 的存取權："+Level$ , 0, "查詢結果"
+		
+	End If
+End Sub
