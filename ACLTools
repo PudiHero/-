@@ -1,0 +1,208 @@
+%REM
+	Library ACLTools
+	Created 2024/9/4 by ARNO TU/DCT
+	Description: ACL相關工具
+%END REM
+Option Public
+
+%REM
+	Sub CreateACLdoc
+	Description: 依db創建ACL資訊的文件
+%END REM
+Sub CreateACLdoc(db As NotesDatabase)
+	Dim s As New NotesSession
+	Dim ACLdb As NotesDatabase
+	Dim ACL As NotesACL
+	Dim ACLentry As NotesACLEntry
+	Dim ACLdoc As NotesDocument
+	
+	Set ACL = db.Acl
+	
+	'RoleArray = Evaluate(|""|)
+	'RoleArray = ACL.Roles
+	
+	'初始化array
+	NameArray = Evaluate(|""|)
+	UserTypeArray = Evaluate(|""|)
+	LevelArray = Evaluate(|""|)
+	RolesArray = Evaluate(|""|)
+	
+	Set ACLentry = ACL.Getfirstentry
+	While Not ACLentry Is Nothing
+		NameArray_Group = Evaluate(|""|)
+		
+		'判斷並拆解群組
+		NameArray_Group = GetNamesByGroup(ACLentry.Name)
+		
+		ForAll PersonName In NameArray_Group
+			NameArray = FullTrim(ArrayAppend(NameArray, PersonName))
+			UserTypeArray = FullTrim(ArrayAppend(UserTypeArray, GetUserTypeString(ACLentry.Usertype)))
+			LevelArray = FullTrim(ArrayAppend(LevelArray, GetLevelString(ACLentry.Level)))
+			
+			RoleString$ = "" '初始化字串
+			ForAll role In ACLentry.Roles
+				RoleString$ = RoleString$ + role
+			End ForAll
+			If RoleString$ = "" Then RoleString$ = "[無]" '防止空值影響顯示
+			RolesArray = FullTrim(ArrayAppend(RolesArray, RoleString$))
+			
+			If Len(RoleString$) > 170 Then '過長的角色會換行，要處理前面的顯示(需調整)
+				NameArray = FullTrim(ArrayAppend(NameArray, "~"))
+				UserTypeArray = FullTrim(ArrayAppend(UserTypeArray, "~"))
+				LevelArray = FullTrim(ArrayAppend(LevelArray, "~"))
+			End If
+		End ForAll
+		
+		Set ACLentry = ACL.Getnextentry(ACLentry)
+	Wend
+	
+	Set ACLdb = s.Currentdatabase
+	Set ACLdoc = ACLdb.Createdocument
+	ACLdoc.Form = "ACL"
+	
+	ACLdoc.UpdateTime = NOW
+	ACLdoc.Title = db.Title
+	ACLdoc.Name = NameArray
+	ACLdoc.UserType = UserTypeArray
+	ACLdoc.Level = LevelArray
+	ACLdoc.Roles = RolesArray
+	
+	Call ACLdoc.Save(True, False)
+	
+End Sub
+
+%REM
+	Function GetLevelString
+	Description: 獲取存取權，將數字翻譯成文字
+%END REM
+Function GetLevelString(Level%) As String
+	
+	Select Case Level%
+		Case 0:
+			GetLevelString = "沒有權限"
+		Case 1:
+			GetLevelString = "儲存者"
+		Case 2:
+			GetLevelString = "讀者"
+		Case 3:
+			GetLevelString = "作者"
+		Case 4:
+			GetLevelString = "編輯者"
+		Case 5:
+			GetLevelString = "設計者"
+		Case 6:
+			GetLevelString = "管理員"
+	End Select
+	
+End Function
+
+%REM
+	Function MemberExpend
+	Description: 無限拆解群組成員
+%END REM
+Function MemberExpend(Groupview As NotesView, Groupdoc As NotesDocument) As Variant
+	Dim EXdoc As NotesDocument
+	
+	MemberArray = Evaluate(|""|)
+	
+	ForAll member In Groupdoc.Members
+		Set EXdoc = Groupview.Getdocumentbykey(member, True)
+		If EXdoc Is Nothing Then'找不到則此member非群組
+			MemberArray = FullTrim(ArrayAppend(MemberArray, "【"+Groupdoc.ListName(0)+"】"+member))
+		Else'找到代表還是群組
+			MemberArray = MemberExpend(Groupview, EXdoc)
+		End If
+	End ForAll
+	
+	'拆到再也找不到以member作為key的Group文件
+	MemberExpend = MemberArray
+	
+End Function
+
+%REM
+	Sub PretendReader
+	Description: 新增entry並啟用讀者role
+%END REM
+Sub PretendReader
+	Dim s As New NotesSession
+	Dim db As NotesDatabase
+	Dim ACL As NotesACL
+	Dim ACLentry As NotesACLEntry
+	
+	Set db = s.Currentdatabase
+	Set ACL = db.Acl
+	'......
+	Set ACLentry = ACL.Createaclentry(s.Commonusername, 2)
+	ACLentry.Enablerole("[讀]")
+	
+End Sub
+
+%REM
+	Function GetACLdoc
+	Description: 依DB的Title搜尋ACLdoc
+%END REM
+Function GetACLdoc(Title$) As NotesDocument
+	Dim s As New NotesSession
+	Dim ACLdb As NotesDatabase
+	Dim ACLview As NotesView
+	Dim ACLdoc As NotesDocument
+	
+	Set ACLdb = s.Getdatabase("RD/DCT", "Testing\DCT_GS.nsf")
+	Set ACLview = ACLdb.Getview("ACLChecking")
+	Set ACLdoc = ACLview.Getdocumentbykey(Title$, True)
+	
+	Set GetACLdoc = ACLdoc
+	
+End Function
+
+%REM
+	Function GetNamesByGroup
+	Description: 從群組文件中抓取成員名字
+%END REM
+Function GetNamesByGroup(GroupName$) As Variant
+	Dim s As New NotesSession
+	
+	'通訊錄
+	Dim Groupdb As NotesDatabase
+	Dim Groupview As NotesView
+	Dim Groupdoc As NotesDocument
+	Dim tmpdoc As NotesDocument
+	
+	MemberArray = Evaluate(|""|)
+	
+	Set Groupdb = s.Getdatabase("AP_NOTES/DCT", "names.nsf")
+	Set Groupview = Groupdb.Getview("Groups")
+	Set Groupdoc = Groupview.Getdocumentbykey(GroupName$, True)
+	
+	If Groupdoc Is Nothing Then'找不到代表這並非群組
+		MemberArray = FullTrim(ArrayAppend(MemberArray, GroupName$))
+	Else'找到代表這是群組
+		MemberArray = MemberExpend(Groupview, Groupdoc)
+	End If
+	
+	GetNamesByGroup = MemberArray
+	
+End Function
+
+%REM
+	Function GetUserTypeString
+	Description: 獲取類型，將數字翻譯成文字
+%END REM
+Function GetUserTypeString(UserType%) As String
+	
+	Select Case UserType%
+		Case 0:
+			GetUserTypeString = "未指定"
+		Case 1:
+			GetUserTypeString = "人員"
+		Case 2:
+			GetUserTypeString = "伺服器"
+		Case 3:
+			GetUserTypeString = "混合式群組"
+		Case 4:
+			GetUserTypeString = "個人群組"
+		Case 5:
+			GetUserTypeString = "伺服器群組"
+	End Select
+	
+End Function
