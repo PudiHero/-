@@ -1,0 +1,46 @@
+%REM
+	Agent 查詢通訊錄群組
+	Created 2024/10/4 by ARNO TU/DCT
+	Description: 依dbmap的群組名稱查詢並開啟通訊錄的群組文件
+%END REM
+Option Public
+
+Sub Initialize
+	Dim s As New NotesSession
+	Dim ws As New NotesUIWorkspace
+	Dim uidoc As NotesUIDocument
+	Dim doc As NotesDocument
+	
+	'通訊錄
+	Dim Groupdb As NotesDatabase
+	Dim Groupview As NotesView
+	Dim Groupdoc As NotesDocument
+	
+	Set Groupdb = s.Getdatabase("AP_NOTES/DCT", "names.nsf")
+	Set Groupview = Groupdb.Getview("Groups")
+	
+	Set uidoc = ws.Currentdocument
+	Set doc = uidoc.Document
+	
+	If doc.Group(0) = "" Then
+		MsgBox "尚未更新系統權限表，請先更新"
+	Else
+		GroupName$ = ws.Prompt (PROMPT_OKCANCELLIST, "選擇", "請選擇群組", doc.Group(0), doc.Group)
+		If GroupName$ = "" Then
+			Exit Sub
+		ElseIf InStr(GroupName$, "-Default-") Then
+			MsgBox GroupName$+" 並非群組，而是預設使用者"
+			Exit Sub
+		End If
+		GroupName$ = StrRight(GroupName$, ".")
+		
+		Set Groupdoc = Groupview.Getdocumentbykey(GroupName$, True)
+		If Groupdoc Is Nothing Then
+			MsgBox "查無群組："+GroupName$+"，其並非群組" , 0, "錯誤"
+		Else
+			Call ws.Editdocument(False, Groupdoc, True)
+		End If
+		
+	End If
+	
+End Sub
